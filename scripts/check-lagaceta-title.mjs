@@ -146,6 +146,7 @@ const fetchYearRecords = async (year) => {
     if (!Number.isSafeInteger(number) || number < 1) continue;
     records.set(number, {
       status: cells[8],
+      receivedAt: cells[1],
       publicationDate: cells[6],
     });
     highest = Math.max(highest, number);
@@ -161,22 +162,28 @@ const fetchYearRecords = async (year) => {
   };
 };
 
-const calculateQueue = (registry, yearRecords, today) => {
+const calculateQueue = (registry, receivedAt, yearRecords, today) => {
   const parts = getRegistryParts(registry);
   if (!parts || !yearRecords?.records.has(Number(parts[2]))) return null;
 
   const targetNumber = Number(parts[2]);
   const targetRecord = yearRecords.records.get(targetNumber);
+  const registrationDate = parseOfficialDate(receivedAt);
   const cutoff = today.getTime() - 29 * dayMs;
   let publishedAhead = 0;
   let pendingAhead = 0;
   let publishedLast30Days = 0;
+  let initialPending = 0;
+  let publishedSinceRegistration = 0;
+  let missingReceiptDates = 0;
+  let missingPublicationDates = 0;
 
   for (const [number, record] of yearRecords.records) {
     if (number >= targetNumber) continue;
-    if (/^publicado$/i.test(record.status)) {
+    const isPublished = /^publicado$/i.test(record.status);
+    const publicationDate = parseOfficialDate(record.publicationDate);
+    if (isPublished) {
       publishedAhead++;
-      const publicationDate = parseOfficialDate(record.publicationDate);
       if (
         publicationDate &&
         publicationDate.getTime() >= cutoff &&
@@ -186,6 +193,22 @@ const calculateQueue = (registry, yearRecords, today) => {
       }
     } else {
       pendingAhead++;
+    }
+
+    if (!registrationDate) continue;
+    const priorReceivedAt = parseOfficialDate(record.receivedAt);
+    if (!priorReceivedAt) {
+      missingReceiptDates++;
+      continue;
+    }
+    if (priorReceivedAt.getTime() > registrationDate.getTime()) continue;
+    if (isPublished && !publicationDate) {
+      missingPublicationDates++;
+      continue;
+    }
+    if (!isPublished || publicationDate.getTime() > registrationDate.getTime()) {
+      initialPending++;
+      if (isPublished) publishedSinceRegistration++;
     }
   }
 
@@ -207,6 +230,11 @@ const calculateQueue = (registry, yearRecords, today) => {
     totalAhead,
     publishedLast30Days,
     estimatedDate,
+    registrationDate: registrationDate?.toISOString().slice(0, 10) ?? null,
+    initialPending,
+    publishedSinceRegistration,
+    missingReceiptDates,
+    missingPublicationDates,
   };
 };
 
@@ -215,11 +243,13 @@ const formatQueue = (queue, status) => {
     return "📈 <b>Avance y fecha:</b> no disponibles";
   }
 
-  const ratio = queue.publishedAhead / queue.totalAhead;
-  const filled = Math.round(ratio * 10);
-  const percentage = (ratio * 100).toLocaleString("es-NI", {
-    maximumFractionDigits: 1,
-  });
+  const missingDates = queue.missingReceiptDates + queue.missingPublicationDates;
+  const reliableHistory = missingDates <= Math.max(10, queue.initialPending * 0.01);
+  const ratio = reliableHistory && queue.registrationDate && queue.initialPending
+    ? queue.publishedSinceRegistration / queue.initialPending
+    : null;
+  const filled = Math.round((ratio ?? 0) * 10);
+  const percentage = Math.round((ratio ?? 0) * 100);
   const count = queue.pendingAhead.toLocaleString("es-NI");
   const rate = queue.publishedLast30Days.toLocaleString("es-NI");
   const date = queue.estimatedDate
@@ -232,8 +262,9 @@ const formatQueue = (queue, status) => {
     : null;
 
   return [
-    `📈 <b>TP anteriores publicados:</b>`,
-    `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${percentage}%`,
+    ratio === null
+      ? "📈 <b>Avance desde el ingreso:</b> no disponible"
+      : `📈 <b>Avance desde el ingreso:</b>\n${"█".repeat(filled)}${"░".repeat(10 - filled)} ≈${percentage}%\n${queue.publishedSinceRegistration.toLocaleString("es-NI")} de ${queue.initialPending.toLocaleString("es-NI")} TP pendientes al ingresar`,
     `⏳ <b>TP anteriores pendientes:</b> ${count}`,
     /^publicado$/i.test(status)
       ? "✅ <b>Tu título ya fue publicado.</b>"
@@ -470,7 +501,7 @@ for (const result of results) {
   const year = getRegistryParts(result.current?.registry)?.[1];
   const yearRecords = year ? await yearRequests.get(year) : null;
   result.queue = yearRecords
-    ? calculateQueue(result.current.registry, yearRecords, today)
+    ? calculateQueue(result.current.registry, result.current.receivedAt, yearRecords, today)
     : null;
 }
 

@@ -9,7 +9,7 @@ El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/t
 
 ### 🚀 Características principales:
 - **📊 Tablero Resumen Unificado:** En cada comprobación se envía un único mensaje consolidado tipo panel de control con el estado de todos los títulos.
-- **📈 Avance y pendientes:** Consulta los registros del mismo año con formato `AÑO-TPnúmero` y cuenta los TP anteriores publicados y los que siguen pendientes. El porcentaje es la proporción publicada entre los anteriores; la barra de diez segmentos cabe en Telegram.
+- **📈 Avance desde el ingreso:** Consulta los registros del mismo año con formato `AÑO-TPnúmero`. La barra muestra qué proporción de los TP anteriores que estaban pendientes al ingresar el título se ha publicado desde entonces. Usa las fechas oficiales de ingreso y publicación; excluye los pocos registros sin fecha verificable y marca el porcentaje como aproximado. Si faltan demasiadas fechas, omite el porcentaje. También muestra cuántos TP anteriores siguen pendientes ahora.
 - **🗓️ Fecha estimada:** Divide los TP anteriores pendientes entre el ritmo real de publicación de esos TP durante los últimos 30 días. Es una aproximación, porque algunos expedientes antiguos se quedan pendientes mientras otros posteriores se publican. Si la búsqueda completa falla o no hay publicaciones recientes, el monitor no inventa un porcentaje ni una fecha.
 - **🔘 Botones interactivos en Telegram:** Acceso directo a la página oficial de consultas y enlace de lectura de la edición de La Gaceta cuando un título sea publicado.
 - **🚨 Alertas de cambios prioritarias:** Si se detecta un cambio de estado, número de Gaceta o ingreso oficial de un título pendiente, se destaca inmediatamente en la cabecera del mensaje.
