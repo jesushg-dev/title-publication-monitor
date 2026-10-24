@@ -91,6 +91,8 @@ const fetchCurrentState = async (registry) => {
 
 const createRecordMessage = (current, previous) => {
   const trackedFields = [
+    ["receivedAt", "Fecha de ingreso"],
+    ["processType", "Tipo de trámite"],
     ["entity", "Titular"],
     ["status", "Estado"],
     ["gazetteNumber", "N.º de Gaceta"],
@@ -109,13 +111,15 @@ const createRecordMessage = (current, previous) => {
 
   const details = [
     `Registro: ${current.registry}`,
+    `Fecha de ingreso: ${current.receivedAt}`,
+    `Tipo de trámite: ${current.processType}`,
     `Titular: ${current.entity}`,
     `Estado: ${current.status}`,
-    `Gaceta: ${current.gazetteNumber}`,
-    `Publicación: ${current.publicationDate}`,
+    `N.º de Gaceta: ${current.gazetteNumber}`,
+    `Enlace: ${current.link}`,
+    `Fecha de publicación: ${current.publicationDate}`,
+    `Fe de errata: ${current.errataDate}`,
   ];
-
-  if (current.link !== "-") details.push(`Enlace: ${current.link}`);
 
   return [
     changes.length > 0
