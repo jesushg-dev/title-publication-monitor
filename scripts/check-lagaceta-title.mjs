@@ -13,6 +13,17 @@ const stateDirectory =
   process.env.TITLE_MONITOR_STATE_DIRECTORY ?? ".title-monitor-state";
 const statePath = path.join(stateDirectory, "state.json");
 
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const formatValue = (value) =>
+  escapeHtml(value && value !== "-" ? value : "Pendiente");
+
 const decodeHtml = (value) =>
   value
     .replace(/<[^>]*>/g, " ")
@@ -105,35 +116,35 @@ const createRecordMessage = (current, previous) => {
         .filter(([field]) => previous[field] !== current[field])
         .map(
           ([field, label]) =>
-            `• ${label}: ${previous[field] || "-"} → ${current[field] || "-"}`,
+            `• <b>${label}:</b> ${formatValue(previous[field])} → ${formatValue(current[field])}`,
         )
     : [];
 
   const details = [
-    `Registro: ${current.registry}`,
-    `Fecha de ingreso: ${current.receivedAt}`,
-    `Tipo de trámite: ${current.processType}`,
-    `Titular: ${current.entity}`,
-    `Estado: ${current.status}`,
-    `N.º de Gaceta: ${current.gazetteNumber}`,
-    `Enlace: ${current.link}`,
-    `Fecha de publicación: ${current.publicationDate}`,
-    `Fe de errata: ${current.errataDate}`,
+    `<b>📋 ${formatValue(current.registry)}</b>`,
+    `👤 <b>Titular:</b> ${formatValue(current.entity)}`,
+    `🗂️ <b>Trámite:</b> ${formatValue(current.processType)}`,
+    `📥 <b>Ingreso:</b> ${formatValue(current.receivedAt)}`,
+    `📌 <b>Estado:</b> ${formatValue(current.status)}`,
+    `📰 <b>N.º de Gaceta:</b> ${formatValue(current.gazetteNumber)}`,
+    `🔗 <b>Enlace:</b> ${formatValue(current.link)}`,
+    `📅 <b>Publicación:</b> ${formatValue(current.publicationDate)}`,
+    `📝 <b>Fe de errata:</b> ${formatValue(current.errataDate)}`,
   ];
 
   return [
     changes.length > 0
-      ? "Cambio detectado:"
+      ? "⚠️ <b>Cambios detectados</b>"
       : previous
-        ? "Sin cambios."
-        : "Primera comprobación.",
+        ? "🟢 Sin cambios desde la última consulta."
+        : "🔎 Primera comprobación.",
     ...changes,
     ...details,
   ].join("\n");
 };
 
 const createFailureMessage = (registry, error) =>
-  `${registry}: no fue posible confirmar el estado. ${error.message}`;
+  `⚠️ <b>${escapeHtml(registry)}</b>: no fue posible confirmar el estado. ${escapeHtml(error.message)}`;
 
 const notifyTelegram = async (message) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -150,7 +161,12 @@ const notifyTelegram = async (message) => {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: message }),
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      }),
     },
   );
 
@@ -169,7 +185,7 @@ for (const registry of registries) {
 }
 
 const message = [
-  "🔔 Estado de títulos profesionales",
+  "<b>🔔 Estado de títulos profesionales</b>",
   ...results.flatMap((result) => [
     "",
     result.current
