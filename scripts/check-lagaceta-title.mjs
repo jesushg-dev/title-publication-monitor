@@ -46,6 +46,14 @@ const escapeHtml = (value) =>
 const formatValue = (value) =>
   escapeHtml(value && value !== "-" ? value : "Pendiente");
 
+const formatStatusBadge = (status) => {
+  const s = String(status ?? "").trim();
+  if (/publicado/i.test(s)) return `🟢 <b>${escapeHtml(s)}</b>`;
+  if (/redactado/i.test(s)) return `📝 <b>${escapeHtml(s)}</b>`;
+  if (/en redacci/i.test(s)) return `✏️ <b>${escapeHtml(s)}</b>`;
+  return `⏳ <b>${escapeHtml(s || "Pendiente")}</b>`;
+};
+
 const decodeHtml = (value) =>
   value
     .replace(/<[^>]*>/g, " ")
@@ -417,17 +425,18 @@ const blocks = results.map((result) => {
   if (current.isPending) {
     return [
       `👤 <b>${escapeHtml(current.entity || current.target)}</b>`,
+      `📌 <b>Estado:</b> ⏳ <b>Pendiente de ingreso por la universidad</b>`,
+      `📋 <b>Registro:</b> Pendiente de asignación`,
       `🔍 <i>Búsqueda activa por nombre</i>`,
-      `⏳ <b>Estado:</b> Pendiente de ingreso por la universidad`,
-      `📋 <b>Registro oficial:</b> Pendiente de asignación`,
       `${estimatePublication(current)}`,
     ].join("\n");
   }
 
   const lines = [
     `👤 <b>${escapeHtml(current.entity || "Titular")}</b>`,
-    `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code> • 📌 <b>${formatValue(current.status)}</b>`,
-    `📥 <b>Ingreso:</b> ${formatValue(current.receivedAt)}`,
+    `📌 <b>Estado:</b> ${formatStatusBadge(current.status)}`,
+    `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code>`,
+    `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
     `${estimatePublication(current)}`,
   ];
 
