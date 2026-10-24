@@ -94,66 +94,152 @@ const extractCells = (row) =>
     return decodeHtml(html);
   });
 
-const getCohortPrefix = (registry) => {
-  const match = /^(\d{4})-TP(\d{5,})$/i.exec(registry);
-  return match
-    ? `${match[1]}-TP${Math.floor(Number(match[2]) / 1000)}`
+const dayMs = 24 * 60 * 60 * 1000;
+
+const getRegistryParts = (registry) =>
+  /^(\d{4})-TP(\d+)$/i.exec(registry ?? "");
+
+const parseOfficialDate = (value) => {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value ?? "");
+  if (!match) return null;
+
+  const date = new Date(Date.UTC(+match[3], +match[2] - 1, +match[1]));
+  return date.getUTCDate() === +match[1] && date.getUTCMonth() === +match[2] - 1
+    ? date
     : null;
 };
 
-const fetchCohortProgress = async (prefix) => {
-  const match = /^(\d{4})-TP(\d+)$/.exec(prefix);
-  const start = Number(match[2]) * 1000;
-  const end = start + 999;
+const getManaguaDate = () => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Managua",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type) => Number(parts.find((item) => item.type === type).value);
+  return new Date(Date.UTC(part("year"), part("month") - 1, part("day")));
+};
+
+const fetchYearRecords = async (year) => {
   const queryUrl = new URL("https://www.lagaceta.gob.ni/consultas");
   queryUrl.searchParams.set("t", "1");
-  queryUrl.searchParams.set("search", prefix);
+  queryUrl.searchParams.set("search", `${year}-TP`);
 
   const response = await fetch(queryUrl, {
     headers: { "User-Agent": "title-publication-monitor/1.0" },
+    signal: AbortSignal.timeout(90_000),
   });
   if (!response.ok) {
     throw new Error(`La Gaceta respondió HTTP ${response.status}.`);
   }
 
   const html = await response.text();
-  const rows = [...html.matchAll(/<tr class="consulta-row">([\s\S]*?)<\/tr>/gi)];
-  const cohort = rows
-    .map((row) => extractCells(row[0]))
-    .filter((cells) => {
-      const registry = /^(\d{4})-TP(\d+)$/i.exec(cells[0] ?? "");
-      const number = Number(registry?.[2]);
-      return (
-        cells.length >= 9 &&
-        registry?.[1] === match[1] &&
-        number >= start &&
-        number <= end
-      );
-    });
+  const records = new Map();
+  let highest = 0;
 
-  if (cohort.length === 0) {
-    throw new Error(`No se encontraron registros del bloque ${prefix}.`);
+  for (const row of html.matchAll(/<tr class="consulta-row">([\s\S]*?)<\/tr>/gi)) {
+    const cells = extractCells(row[0]);
+    const registry = getRegistryParts(cells[0]);
+    if (cells.length < 9 || registry?.[1] !== year) continue;
+
+    const number = Number(registry[2]);
+    if (!Number.isSafeInteger(number) || number < 1) continue;
+    records.set(number, {
+      status: cells[8],
+      publicationDate: cells[6],
+    });
+    highest = Math.max(highest, number);
+  }
+
+  if (!highest || records.size !== highest) {
+    throw new Error(`La consulta de TP ${year} devolvió datos incompletos.`);
   }
 
   return {
-    start,
-    end,
-    total: cohort.length,
-    published: cohort.filter((cells) => /^publicado$/i.test(cells[8])).length,
+    records,
+    source: queryUrl.toString(),
   };
 };
 
-const formatCohortProgress = (progress) => {
-  if (!progress) return "📈 <b>Publicaciones del bloque:</b> no disponible";
-  const ratio = progress.published / progress.total;
+const calculateQueue = (registry, yearRecords, today) => {
+  const parts = getRegistryParts(registry);
+  if (!parts || !yearRecords?.records.has(Number(parts[2]))) return null;
+
+  const targetNumber = Number(parts[2]);
+  const targetRecord = yearRecords.records.get(targetNumber);
+  const cutoff = today.getTime() - 29 * dayMs;
+  let publishedAhead = 0;
+  let pendingAhead = 0;
+  let publishedLast30Days = 0;
+
+  for (const [number, record] of yearRecords.records) {
+    if (number >= targetNumber) continue;
+    if (/^publicado$/i.test(record.status)) {
+      publishedAhead++;
+      const publicationDate = parseOfficialDate(record.publicationDate);
+      if (
+        publicationDate &&
+        publicationDate.getTime() >= cutoff &&
+        publicationDate.getTime() <= today.getTime()
+      ) {
+        publishedLast30Days++;
+      }
+    } else {
+      pendingAhead++;
+    }
+  }
+
+  const totalAhead = publishedAhead + pendingAhead;
+  const dailyRate = publishedLast30Days / 30;
+  const daysRemaining =
+    dailyRate > 0 && pendingAhead > 0 && !/^publicado$/i.test(targetRecord.status)
+      ? Math.ceil(pendingAhead / dailyRate)
+      : null;
+  const estimatedDate = daysRemaining === null
+    ? null
+    : new Date(today.getTime() + daysRemaining * dayMs).toISOString().slice(0, 10);
+
+  return {
+    registry,
+    source: yearRecords.source,
+    publishedAhead,
+    pendingAhead,
+    totalAhead,
+    publishedLast30Days,
+    estimatedDate,
+  };
+};
+
+const formatQueue = (queue, status) => {
+  if (!queue || !queue.totalAhead) {
+    return "📈 <b>Avance y fecha:</b> no disponibles";
+  }
+
+  const ratio = queue.publishedAhead / queue.totalAhead;
   const filled = Math.round(ratio * 10);
   const percentage = (ratio * 100).toLocaleString("es-NI", {
     maximumFractionDigits: 1,
   });
+  const count = queue.pendingAhead.toLocaleString("es-NI");
+  const rate = queue.publishedLast30Days.toLocaleString("es-NI");
+  const date = queue.estimatedDate
+    ? new Intl.DateTimeFormat("es-NI", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(`${queue.estimatedDate}T00:00:00Z`))
+    : null;
 
   return [
-    `📈 <b>Publicados en TP${progress.start}–${progress.end}:</b>`,
-    `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${percentage}% (${progress.published}/${progress.total})`,
+    `📈 <b>TP anteriores publicados:</b>`,
+    `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${percentage}%`,
+    `⏳ <b>TP anteriores pendientes:</b> ${count}`,
+    /^publicado$/i.test(status)
+      ? "✅ <b>Tu título ya fue publicado.</b>"
+      : date
+        ? `🗓️ <b>Fecha estimada:</b> aprox. ${date} (${rate} publicados en 30 días)`
+        : "🗓️ <b>Fecha estimada:</b> no disponible con los datos recientes",
   ].join("\n");
 };
 
@@ -163,9 +249,7 @@ const loadPreviousRecords = async () => {
 
     if (savedState.registry) return { [savedState.registry]: savedState };
 
-    const records = savedState.records ?? {};
-    delete records["2026-TP30796"];
-    return records;
+    return savedState.records ?? {};
   } catch (error) {
     if (error.code === "ENOENT") return {};
     throw error;
@@ -239,40 +323,6 @@ const fetchCurrentState = async (target) => {
     if (allWordsMatch) {
       matchedCells = cells;
       break;
-    }
-  }
-
-  // If not found and target has "cisnero" or "cisneros", check alternative spelling
-  if (!matchedCells && /cisneros?/i.test(target)) {
-    const altTarget = /cisneros\b/i.test(target)
-      ? target.replace(/cisneros\b/i, "cisnero")
-      : target.replace(/cisnero\b/i, "cisneros");
-
-    const altUrl = new URL("https://www.lagaceta.gob.ni/consultas");
-    altUrl.searchParams.set("t", "1");
-    altUrl.searchParams.set("search", altTarget);
-
-    const altResponse = await fetch(altUrl, {
-      headers: { "User-Agent": "title-publication-monitor/1.0" },
-    });
-
-    if (altResponse.ok) {
-      const altHtml = await altResponse.text();
-      const altRows = [
-        ...altHtml.matchAll(/<tr class="consulta-row">([\s\S]*?)<\/tr>/gi),
-      ];
-      for (const m of altRows) {
-        const cells = extractCells(m[0]);
-        if (cells.length < 9) continue;
-        const normalizedEntity = normalizeText(cells[3]);
-        const altWords = normalizeText(altTarget)
-          .split(" ")
-          .filter((w) => w.length > 2);
-        if (altWords.every((word) => normalizedEntity.includes(word))) {
-          matchedCells = cells;
-          break;
-        }
-      }
     }
   }
 
@@ -402,22 +452,26 @@ for (const target of targets) {
   }
 }
 
-const cohortRequests = new Map();
+const yearRequests = new Map();
 for (const { current } of results) {
-  const prefix = current?.registry && getCohortPrefix(current.registry);
-  if (prefix && !cohortRequests.has(prefix)) {
-    cohortRequests.set(
-      prefix,
-      fetchCohortProgress(prefix).catch((error) => {
-        console.warn(`No se pudo consultar el bloque ${prefix}: ${error.message}`);
+  const year = getRegistryParts(current?.registry)?.[1];
+  if (year && !yearRequests.has(year)) {
+    yearRequests.set(
+      year,
+      fetchYearRecords(year).catch((error) => {
+        console.warn(`No se pudo contar los TP de ${year}: ${error.message}`);
         return null;
       }),
     );
   }
 }
+const today = getManaguaDate();
 for (const result of results) {
-  const prefix = result.current?.registry && getCohortPrefix(result.current.registry);
-  result.cohortProgress = prefix ? await cohortRequests.get(prefix) : null;
+  const year = getRegistryParts(result.current?.registry)?.[1];
+  const yearRecords = year ? await yearRequests.get(year) : null;
+  result.queue = yearRecords
+    ? calculateQueue(result.current.registry, yearRecords, today)
+    : null;
 }
 
 // Build the Dashboard Message
@@ -463,7 +517,7 @@ const blocks = results.map((result) => {
       `📌 <b>Estado:</b> ⏳ <b>Pendiente de ingreso por la universidad</b>`,
       `📋 <b>Registro:</b> Pendiente de asignación`,
       `🔍 <i>Búsqueda activa por nombre</i>`,
-      `📈 <i>El porcentaje estará disponible cuando tenga número de registro.</i>`,
+      `📈 <i>El porcentaje y la fecha estarán disponibles al recibir su registro.</i>`,
     ].join("\n");
   }
 
@@ -472,7 +526,7 @@ const blocks = results.map((result) => {
     `📌 <b>Estado:</b> ${formatStatusBadge(current.status)}`,
     `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code>`,
     `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-    formatCohortProgress(result.cohortProgress),
+    formatQueue(result.queue, current.status),
   ];
 
   if (current.gazetteNumber !== "-") {
@@ -501,6 +555,7 @@ const dashboardMessage = [
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
+  "<i>Estimación según el ritmo de 30 días; algunos TP se publican fuera de orden.</i>",
   footer,
 ].join("\n");
 
@@ -541,14 +596,26 @@ for (const { target, current } of results) {
   updatedRecords[target] = current;
 }
 
-const cleanedPreviousRecords = { ...previousRecords };
-delete cleanedPreviousRecords["2026-TP30796"];
+const activePreviousRecords = Object.fromEntries(
+  Object.entries(previousRecords).filter(([key]) =>
+    targets.includes(key) ||
+    targets.some((target) => previousRecords[target]?.registry === key),
+  ),
+);
 
 await mkdir(stateDirectory, { recursive: true });
 await writeFile(
   statePath,
   `${JSON.stringify(
-    { records: { ...cleanedPreviousRecords, ...updatedRecords } },
+    {
+      checkedAt: now.toISOString(),
+      records: { ...activePreviousRecords, ...updatedRecords },
+      estimates: Object.fromEntries(
+        results
+          .filter(({ current, queue }) => current?.registry && queue)
+          .map(({ current, queue }) => [current.registry, queue]),
+      ),
+    },
     null,
     2,
   )}\n`,

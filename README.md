@@ -9,7 +9,8 @@ El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/t
 
 ### 🚀 Características principales:
 - **📊 Tablero Resumen Unificado:** En cada comprobación se envía un único mensaje consolidado tipo panel de control con el estado de todos los títulos.
-- **📈 Porcentaje observable:** Para cada registro con número oficial, consulta los TP de su mismo bloque de mil y muestra qué proporción de ese bloque figura como «Publicado». Una barra de diez segmentos cabe en Telegram. El porcentaje describe el bloque; no predice cuándo se publicará un título individual. Si falla esa consulta, el porcentaje aparece como no disponible y el estado del título se sigue informando.
+- **📈 Avance y pendientes:** Consulta los registros del mismo año con formato `AÑO-TPnúmero` y cuenta los TP anteriores publicados y los que siguen pendientes. El porcentaje es la proporción publicada entre los anteriores; la barra de diez segmentos cabe en Telegram.
+- **🗓️ Fecha estimada:** Divide los TP anteriores pendientes entre el ritmo real de publicación de esos TP durante los últimos 30 días. Es una aproximación, porque algunos expedientes antiguos se quedan pendientes mientras otros posteriores se publican. Si la búsqueda completa falla o no hay publicaciones recientes, el monitor no inventa un porcentaje ni una fecha.
 - **🔘 Botones interactivos en Telegram:** Acceso directo a la página oficial de consultas y enlace de lectura de la edición de La Gaceta cuando un título sea publicado.
 - **🚨 Alertas de cambios prioritarias:** Si se detecta un cambio de estado, número de Gaceta o ingreso oficial de un título pendiente, se destaca inmediatamente en la cabecera del mensaje.
 
@@ -23,7 +24,7 @@ El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/t
    - `TELEGRAM_CHAT_ID`: el `chat.id` que obtuviste.
 5. Abre **Actions → Monitor title publication → Run workflow** para comprobar el primer mensaje.
 
-El estado previo se guarda en la caché de GitHub Actions. Si esa caché vence o se elimina, la siguiente ejecución se identificará como la primera comprobación y luego continuará comparando normalmente.
+Los registros confirmados y sus estimaciones se guardan como JSON en `.title-monitor-state/state.json` dentro de la caché de GitHub Actions. Cada ejecución correcta también adjunta ese archivo para descargarlo en **Actions → ejecución → Artifacts → title-records-...**. GitHub conserva el adjunto durante 90 días. Si la caché vence o se elimina, la siguiente ejecución se identificará como la primera comprobación y luego continuará comparando normalmente.
 
 Para probar la consulta localmente sin enviar Telegram, ejecuta:
 
