@@ -1,8 +1,13 @@
 # Monitor de publicación del título
 
-El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/title-publication-monitor.yml) consulta los registros `2026-TP30799`, `2026-TP30796` y `2026-TP29824` en La Gaceta cada día a las 8:30, 10:30, 12:00, 13:30, 15:30 y 17:15, hora de Nicaragua (`America/Managua`). GitHub Actions ejecuta los cron en UTC, por eso el archivo usa 14:30, 16:30, 18:00, 19:30, 21:30 y 23:15 UTC.
+El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/title-publication-monitor.yml) consulta los títulos profesionales en La Gaceta cada día a las 8:30, 10:30, 12:00, 13:30, 15:30 y 17:15, hora de Nicaragua (`America/Managua`). GitHub Actions ejecuta los cron en UTC (14:30, 16:30, 18:00, 19:30, 21:30 y 23:15 UTC).
 
-Envía un mensaje de Telegram en cada comprobación con un saludo personalizado y los detalles del título. Si hay un cambio en el estado, número de Gaceta, enlace, fecha de publicación o fecha de errata, el mensaje incluye el detalle de los valores anterior y nuevo.
+Actualmente monitorea:
+- `2026-TP30799`: Jesús Enmanuel Hernández González
+- `2026-TP29824`: Luis Emilio Díaz Gutiérrez
+- `Danilo Jose Acevedo Cisnero`: Monitoreo activo por nombre (búsqueda continua en La Gaceta hasta que la universidad ingrese el trámite y se le asigne su número de registro oficial).
+
+Envía un mensaje de Telegram en cada comprobación con un saludo personalizado y los detalles del título. Si hay un cambio en el estado, número de Gaceta, enlace, fecha de publicación, fecha de errata, o cuando un título pendiente por nombre sea registrado oficialmente, el mensaje incluye el detalle completo.
 
 ## Configuración en GitHub
 
