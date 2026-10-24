@@ -94,50 +94,67 @@ const extractCells = (row) =>
     return decodeHtml(html);
   });
 
-const estimatePublication = (record) => {
-  if (record.isPending || !record.registry) {
-    return "⏳ <b>Estimación:</b> Aprox. 8-10 semanas a partir de su ingreso oficial";
+const getCohortPrefix = (registry) => {
+  const match = /^(\d{4})-TP(\d{5,})$/i.exec(registry);
+  return match
+    ? `${match[1]}-TP${Math.floor(Number(match[2]) / 1000)}`
+    : null;
+};
+
+const fetchCohortProgress = async (prefix) => {
+  const match = /^(\d{4})-TP(\d+)$/.exec(prefix);
+  const start = Number(match[2]) * 1000;
+  const end = start + 999;
+  const queryUrl = new URL("https://www.lagaceta.gob.ni/consultas");
+  queryUrl.searchParams.set("t", "1");
+  queryUrl.searchParams.set("search", prefix);
+
+  const response = await fetch(queryUrl, {
+    headers: { "User-Agent": "title-publication-monitor/1.0" },
+  });
+  if (!response.ok) {
+    throw new Error(`La Gaceta respondió HTTP ${response.status}.`);
   }
 
-  if (record.status === "Publicado") {
-    return "🎉 <b>Publicación:</b> ¡Ya publicado en La Gaceta oficial!";
+  const html = await response.text();
+  const rows = [...html.matchAll(/<tr class="consulta-row">([\s\S]*?)<\/tr>/gi)];
+  const cohort = rows
+    .map((row) => extractCells(row[0]))
+    .filter((cells) => {
+      const registry = /^(\d{4})-TP(\d+)$/i.exec(cells[0] ?? "");
+      const number = Number(registry?.[2]);
+      return (
+        cells.length >= 9 &&
+        registry?.[1] === match[1] &&
+        number >= start &&
+        number <= end
+      );
+    });
+
+  if (cohort.length === 0) {
+    throw new Error(`No se encontraron registros del bloque ${prefix}.`);
   }
 
-  const match = record.registry.match(/TP(\d+)/i);
-  if (!match) return "⏱️ <b>Estimación:</b> En trámite";
+  return {
+    start,
+    end,
+    total: cohort.length,
+    published: cohort.filter((cells) => /^publicado$/i.test(cells[8])).length,
+  };
+};
 
-  const registryNum = parseInt(match[1], 10);
-  const currentFrontier = 23200; // Frente publicado en octubre 2026
-  const diff = registryNum - currentFrontier;
+const formatCohortProgress = (progress) => {
+  if (!progress) return "📈 <b>Publicaciones del bloque:</b> no disponible";
+  const ratio = progress.published / progress.total;
+  const filled = Math.round(ratio * 10);
+  const percentage = (ratio * 100).toLocaleString("es-NI", {
+    maximumFractionDigits: 1,
+  });
 
-  if (diff <= 0) {
-    return "⚡ <b>Estimación:</b> En proceso de publicación inminente";
-  }
-
-  const weeks = Math.ceil(diff / 1500);
-  const estDate = new Date();
-  estDate.setDate(estDate.getDate() + weeks * 7);
-
-  const monthsEs = [
-    "Enero",
-    "Febrero",
-    "Marzo",
-    "Abril",
-    "Mayo",
-    "Junio",
-    "Julio",
-    "Agosto",
-    "Septiembre",
-    "Octubre",
-    "Noviembre",
-    "Diciembre",
-  ];
-  const monthName = monthsEs[estDate.getMonth()];
-  const year = estDate.getFullYear();
-  const partOfMonth =
-    estDate.getDate() <= 15 ? "Inicios/Mediados de" : "Finales de";
-
-  return `⏱️ <b>Estimación:</b> ${partOfMonth} ${monthName} ${year} (~${diff.toLocaleString("es-NI")} en cola, ~${weeks} sem)`;
+  return [
+    `📈 <b>Publicados en TP${progress.start}–${progress.end}:</b>`,
+    `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${percentage}% (${progress.published}/${progress.total})`,
+  ].join("\n");
 };
 
 const loadPreviousRecords = async () => {
@@ -385,6 +402,24 @@ for (const target of targets) {
   }
 }
 
+const cohortRequests = new Map();
+for (const { current } of results) {
+  const prefix = current?.registry && getCohortPrefix(current.registry);
+  if (prefix && !cohortRequests.has(prefix)) {
+    cohortRequests.set(
+      prefix,
+      fetchCohortProgress(prefix).catch((error) => {
+        console.warn(`No se pudo consultar el bloque ${prefix}: ${error.message}`);
+        return null;
+      }),
+    );
+  }
+}
+for (const result of results) {
+  const prefix = result.current?.registry && getCohortPrefix(result.current.registry);
+  result.cohortProgress = prefix ? await cohortRequests.get(prefix) : null;
+}
+
 // Build the Dashboard Message
 const now = new Date();
 const timeStr =
@@ -428,7 +463,7 @@ const blocks = results.map((result) => {
       `📌 <b>Estado:</b> ⏳ <b>Pendiente de ingreso por la universidad</b>`,
       `📋 <b>Registro:</b> Pendiente de asignación`,
       `🔍 <i>Búsqueda activa por nombre</i>`,
-      `${estimatePublication(current)}`,
+      `📈 <i>El porcentaje estará disponible cuando tenga número de registro.</i>`,
     ].join("\n");
   }
 
@@ -437,7 +472,7 @@ const blocks = results.map((result) => {
     `📌 <b>Estado:</b> ${formatStatusBadge(current.status)}`,
     `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code>`,
     `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-    `${estimatePublication(current)}`,
+    formatCohortProgress(result.cohortProgress),
   ];
 
   if (current.gazetteNumber !== "-") {
@@ -458,7 +493,7 @@ const blocks = results.map((result) => {
 const footer =
   allChanges.length > 0 || anyNewlyDiscovered
     ? "Te mantendremos informado ante cualquier nueva actualización."
-    : "🔔 <i>Sin cambios desde la última comprobación programada.</i>";
+    : "🔔 <i>Sin cambios desde la última comprobación.</i>";
 
 const dashboardMessage = [
   headerTitle,
