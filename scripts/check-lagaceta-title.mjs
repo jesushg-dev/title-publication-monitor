@@ -4,7 +4,7 @@ import path from "node:path";
 const defaultRegistries = [
   "2026-TP30799",
   "2026-TP29824",
-  "Danilo Jose Acevedo Cisnero",
+  "DANILO JOSE ACEVEDO CISNERO",
 ];
 
 const targets = (
@@ -71,6 +71,52 @@ const extractCells = (row) =>
     return decodeHtml(html);
   });
 
+const estimatePublication = (record) => {
+  if (record.isPending || !record.registry) {
+    return "⏳ <b>Estimación:</b> Aprox. 8-10 semanas a partir de su ingreso oficial";
+  }
+
+  if (record.status === "Publicado") {
+    return "🎉 <b>Publicación:</b> ¡Ya publicado en La Gaceta oficial!";
+  }
+
+  const match = record.registry.match(/TP(\d+)/i);
+  if (!match) return "⏱️ <b>Estimación:</b> En trámite";
+
+  const registryNum = parseInt(match[1], 10);
+  const currentFrontier = 23200; // Frente publicado en octubre 2026
+  const diff = registryNum - currentFrontier;
+
+  if (diff <= 0) {
+    return "⚡ <b>Estimación:</b> En proceso de publicación inminente";
+  }
+
+  const weeks = Math.ceil(diff / 1500);
+  const estDate = new Date();
+  estDate.setDate(estDate.getDate() + weeks * 7);
+
+  const monthsEs = [
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+  ];
+  const monthName = monthsEs[estDate.getMonth()];
+  const year = estDate.getFullYear();
+  const partOfMonth =
+    estDate.getDate() <= 15 ? "Inicios/Mediados de" : "Finales de";
+
+  return `⏱️ <b>Estimación:</b> ${partOfMonth} ${monthName} ${year} (~${diff.toLocaleString("es-NI")} en cola, ~${weeks} sem)`;
+};
+
 const loadPreviousRecords = async () => {
   try {
     const savedState = JSON.parse(await readFile(statePath, "utf8"));
@@ -78,7 +124,6 @@ const loadPreviousRecords = async () => {
     if (savedState.registry) return { [savedState.registry]: savedState };
 
     const records = savedState.records ?? {};
-    // Clean up outdated or invalid registries
     delete records["2026-TP30796"];
     return records;
   } catch (error) {
@@ -224,101 +269,7 @@ const fetchCurrentState = async (target) => {
   };
 };
 
-const createRecordMessage = (current, previous) => {
-  if (current.isPending) {
-    return [
-      `¡Hola, <b>${escapeHtml(current.entity || current.target)}</b>! 👋`,
-      "",
-      "Hemos revisado tu título profesional en La Gaceta y <b>aún no aparece ingresado en el sistema</b>.",
-      "",
-      `🔍 <b>Búsqueda activa:</b> ${escapeHtml(current.target)}`,
-      `📌 <b>Estado:</b> Pendiente de ingreso por la universidad`,
-      `📋 <b>Registro oficial:</b> Pendiente de asignación`,
-      "",
-      "Te mantendremos informado en cada comprobación hasta que la universidad remita tus datos y La Gaceta le asigne tu número oficial de trámite.",
-    ].join("\n");
-  }
-
-  if (previous?.isPending && !current.isPending) {
-    return [
-      `¡Hola, <b>${escapeHtml(current.entity || "Titular")}</b>! 👋`,
-      "",
-      "🎉 <b>¡EXCELENTES NOTICIAS! Tu título profesional ya fue ingresado a La Gaceta.</b>",
-      "",
-      `📋 <b>Registro asignado:</b> ${formatValue(current.registry)}`,
-      `🗂️ <b>Tipo de trámite:</b> ${formatValue(current.processType)}`,
-      `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-      `📌 <b>Estado:</b> ${formatValue(current.status)}`,
-      `📰 <b>N.º de Gaceta:</b> ${formatValue(current.gazetteNumber)}`,
-      `🔗 <b>Enlace:</b> ${formatValue(current.link)}`,
-      `📅 <b>Fecha de publicación:</b> ${formatValue(current.publicationDate)}`,
-      `📝 <b>Fecha de fe de errata:</b> ${formatValue(current.errataDate)}`,
-      "",
-      "A partir de este momento continuaremos monitoreando su avance hasta su publicación final.",
-    ].join("\n");
-  }
-
-  const trackedFields = [
-    ["receivedAt", "Fecha de ingreso"],
-    ["processType", "Tipo de trámite"],
-    ["entity", "Titular"],
-    ["status", "Estado"],
-    ["gazetteNumber", "N.º de Gaceta"],
-    ["link", "Enlace"],
-    ["publicationDate", "Fecha de publicación"],
-    ["errataDate", "Fecha de fe de errata"],
-  ];
-
-  const changes =
-    previous && !previous.isPending
-      ? trackedFields
-          .filter(([field]) => previous[field] !== current[field])
-          .map(
-            ([field, label]) =>
-              `• <b>${label}:</b> ${formatValue(previous[field])} → ${formatValue(current[field])}`,
-          )
-      : [];
-
-  const statusText =
-    changes.length > 0
-      ? "se detectaron cambios"
-      : "no hay cambios desde la última consulta";
-
-  const lines = [
-    `¡Hola, <b>${escapeHtml(current.entity || "Titular")}</b>! 👋`,
-    "",
-    `Hemos revisado tu título profesional y ${statusText}.`,
-    "",
-    `📋 <b>Registro:</b> ${formatValue(current.registry)}`,
-    `🗂️ <b>Tipo de trámite:</b> ${formatValue(current.processType)}`,
-    `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-    `📌 <b>Estado:</b> ${formatValue(current.status)}`,
-    `📰 <b>N.º de Gaceta:</b> ${formatValue(current.gazetteNumber)}`,
-    `🔗 <b>Enlace:</b> ${formatValue(current.link)}`,
-    `📅 <b>Fecha de publicación:</b> ${formatValue(current.publicationDate)}`,
-    `📝 <b>Fecha de fe de errata:</b> ${formatValue(current.errataDate)}`,
-  ];
-
-  if (changes.length > 0) {
-    lines.push("", "🔄 <b>Detalle de los cambios:</b>", ...changes);
-  }
-
-  lines.push("", "Te mantendremos informado sobre cualquier actualización.");
-
-  return lines.join("\n");
-};
-
-const createFailureMessage = (target, error) =>
-  [
-    `⚠️ <b>Consulta: ${escapeHtml(target)}</b>`,
-    "",
-    "No fue posible consultar el estado del título en La Gaceta en este momento.",
-    `<b>Error:</b> ${escapeHtml(error.message)}`,
-    "",
-    "Te mantendremos informado en la próxima comprobación.",
-  ].join("\n");
-
-const notifyTelegram = async (message) => {
+const notifyTelegram = async (message, inlineKeyboard = []) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -328,22 +279,31 @@ const notifyTelegram = async (message) => {
     );
   }
 
+  const payload = {
+    chat_id: chatId,
+    text: message,
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  };
+
+  if (inlineKeyboard.length > 0) {
+    payload.reply_markup = {
+      inline_keyboard: inlineKeyboard,
+    };
+  }
+
   const response = await fetch(
     `https://api.telegram.org/bot${token}/sendMessage`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      }),
+      body: JSON.stringify(payload),
     },
   );
 
-  if (!response.ok)
+  if (!response.ok) {
     throw new Error(`Telegram respondió HTTP ${response.status}.`);
+  }
 };
 
 const previousRecords = await loadPreviousRecords();
@@ -359,37 +319,160 @@ for (const target of targets) {
     const current = await fetchCurrentState(resolvedTarget);
     current.target = target;
 
+    const prev =
+      previousRecords[target] ??
+      (current.registry ? previousRecords[current.registry] : null);
+
+    const trackedFields = [
+      ["receivedAt", "Fecha de ingreso"],
+      ["processType", "Tipo de trámite"],
+      ["entity", "Titular"],
+      ["status", "Estado"],
+      ["gazetteNumber", "N.º de Gaceta"],
+      ["link", "Enlace"],
+      ["publicationDate", "Fecha de publicación"],
+      ["errataDate", "Fecha de fe de errata"],
+    ];
+
+    let changes = [];
+    let isNewlyDiscovered = false;
+
+    if (prev?.isPending && !current.isPending) {
+      isNewlyDiscovered = true;
+      changes.push(`🎉 <b>¡Registro asignado en La Gaceta:</b> ${formatValue(current.registry)}`);
+    } else if (prev && !prev.isPending && !current.isPending) {
+      changes = trackedFields
+        .filter(([field]) => prev[field] !== current[field])
+        .map(
+          ([field, label]) =>
+            `• <b>${label}:</b> ${formatValue(prev[field])} → ${formatValue(current[field])}`,
+        );
+    }
+
     results.push({
       target,
       current,
+      prev,
+      changes,
+      isNewlyDiscovered,
       error: null,
     });
   } catch (error) {
-    results.push({ target, current: null, error });
+    results.push({ target, current: null, prev: null, changes: [], error });
   }
 }
 
-const messages = results.map((result) => {
-  if (result.current) {
-    const prev =
-      previousRecords[result.target] ??
-      (result.current.registry
-        ? previousRecords[result.current.registry]
-        : null);
-    return createRecordMessage(result.current, prev);
+// Build the Dashboard Message
+const now = new Date();
+const timeStr =
+  now.toLocaleDateString("es-NI", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "America/Managua",
+  }) +
+  " • " +
+  now.toLocaleTimeString("es-NI", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Managua",
+  }) +
+  " (Managua)";
+
+const allChanges = results.flatMap((r) => r.changes);
+const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
+
+let headerTitle = "🎓 <b>MONITOR DE TÍTULOS — LA GACETA</b>";
+if (anyNewlyDiscovered) {
+  headerTitle = "🎉 <b>¡NUEVO TÍTULO INGRESADO A LA GACETA!</b> 🎉\n\n" + headerTitle;
+} else if (allChanges.length > 0) {
+  headerTitle = "🚨 <b>¡CAMBIO DETECTADO EN TU TRÁMITE!</b> 🚨\n\n" + headerTitle;
+}
+
+const blocks = results.map((result) => {
+  if (result.error) {
+    return [
+      `⚠️ <b>${escapeHtml(result.target)}</b>`,
+      `<b>Error al consultar:</b> ${escapeHtml(result.error.message)}`,
+    ].join("\n");
   }
-  return createFailureMessage(result.target, result.error);
+
+  const { current, changes, isNewlyDiscovered } = result;
+
+  if (current.isPending) {
+    return [
+      `👤 <b>${escapeHtml(current.entity || current.target)}</b>`,
+      `🔍 <i>Búsqueda activa por nombre</i>`,
+      `⏳ <b>Estado:</b> Pendiente de ingreso por la universidad`,
+      `📋 <b>Registro oficial:</b> Pendiente de asignación`,
+      `${estimatePublication(current)}`,
+    ].join("\n");
+  }
+
+  const lines = [
+    `👤 <b>${escapeHtml(current.entity || "Titular")}</b>`,
+    `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code> • 📌 <b>${formatValue(current.status)}</b>`,
+    `📥 <b>Ingreso:</b> ${formatValue(current.receivedAt)}`,
+    `${estimatePublication(current)}`,
+  ];
+
+  if (current.gazetteNumber !== "-") {
+    lines.push(
+      `📰 <b>Gaceta N.º:</b> ${formatValue(current.gazetteNumber)} | 📅 <b>Publicación:</b> ${formatValue(current.publicationDate)}`,
+    );
+  }
+
+  if (isNewlyDiscovered) {
+    lines.push("", "🎉 <b>¡Tu título ya fue ingresado al sistema de La Gaceta!</b>");
+  } else if (changes.length > 0) {
+    lines.push("", "🔄 <b>Cambios detectados:</b>", ...changes);
+  }
+
+  return lines.join("\n");
 });
 
-for (const msg of messages) {
-  if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
-    await notifyTelegram(msg);
-    if (messages.length > 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+const footer =
+  allChanges.length > 0 || anyNewlyDiscovered
+    ? "Te mantendremos informado ante cualquier nueva actualización."
+    : "🔔 <i>Sin cambios desde la última comprobación programada.</i>";
+
+const dashboardMessage = [
+  headerTitle,
+  `📅 <i>${timeStr}</i>`,
+  "───────────────────────────",
+  blocks.join("\n───────────────────────────\n"),
+  "───────────────────────────",
+  footer,
+].join("\n");
+
+// Interactive Buttons (Inline Keyboard)
+const inlineKeyboard = [
+  [
+    {
+      text: "🔍 Consultar en La Gaceta",
+      url: "https://www.lagaceta.gob.ni/consultas",
+    },
+  ],
+];
+
+// Add direct reading button for any published edition
+for (const { current } of results) {
+  if (current?.link && current.link !== "-") {
+    inlineKeyboard.push([
+      {
+        text: `📖 Leer Gaceta N.º ${current.gazetteNumber || "Oficial"} (${current.entity ? current.entity.split(" ")[0] : "Título"})`,
+        url: current.link,
+      },
+    ]);
   }
 }
 
+// Send Consolidated Dashboard via Telegram
+if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
+  await notifyTelegram(dashboardMessage, inlineKeyboard);
+}
+
+// Save Updated State
 const updatedRecords = {};
 for (const { target, current } of results) {
   if (!current) continue;
@@ -412,4 +495,5 @@ await writeFile(
   )}\n`,
 );
 
-console.log(messages.join("\n\n" + "=".repeat(40) + "\n\n"));
+console.log(dashboardMessage);
+console.log("\n[Botones interactivos adjuntos]:", JSON.stringify(inlineKeyboard, null, 2));
