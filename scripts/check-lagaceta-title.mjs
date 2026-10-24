@@ -79,6 +79,7 @@ const fetchCurrentState = async (registry) => {
     registry: cells[0],
     receivedAt: cells[1],
     processType: cells[2],
+    entity: cells[3],
     gazetteNumber: cells[4],
     link: cells[5],
     publicationDate: cells[6],
@@ -90,6 +91,7 @@ const fetchCurrentState = async (registry) => {
 
 const createRecordMessage = (current, previous) => {
   const trackedFields = [
+    ["entity", "Titular"],
     ["status", "Estado"],
     ["gazetteNumber", "N.º de Gaceta"],
     ["link", "Enlace"],
@@ -106,7 +108,9 @@ const createRecordMessage = (current, previous) => {
     : [];
 
   const details = [
-    `${current.registry}: ${current.status}`,
+    `Registro: ${current.registry}`,
+    `Titular: ${current.entity}`,
+    `Estado: ${current.status}`,
     `Gaceta: ${current.gazetteNumber}`,
     `Publicación: ${current.publicationDate}`,
   ];
