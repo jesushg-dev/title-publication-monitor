@@ -4,7 +4,7 @@ import path from "node:path";
 const defaultRegistries = [
   "2026-TP30799",
   "2026-TP29824",
-  "DANILO JOSE ACEVEDO CISNERO",
+  "DANILO JOSE ACEVEDO FLORES",
 ];
 
 const targets = (
