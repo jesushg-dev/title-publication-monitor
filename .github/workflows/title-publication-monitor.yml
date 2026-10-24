@@ -2,12 +2,12 @@ name: Monitor title publication
 
 on:
   schedule:
-    - cron: "30 14 * * *"
-    - cron: "30 16 * * *"
-    - cron: "0 18 * * *"
-    - cron: "30 19 * * *"
-    - cron: "30 21 * * *"
-    - cron: "15 23 * * *"
+    - cron: "30 14 * * 1-6"
+    - cron: "30 16 * * 1-6"
+    - cron: "0 18 * * 1-6"
+    - cron: "30 19 * * 1-6"
+    - cron: "30 21 * * 1-6"
+    - cron: "15 23 * * 1-6"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
 
       - uses: actions/cache/save@v5
         if: always()

@@ -20,6 +20,21 @@ const stateDirectory =
   process.env.TITLE_MONITOR_STATE_DIRECTORY ?? ".title-monitor-state";
 const statePath = path.join(stateDirectory, "state.json");
 
+const nicaraguaWeekday = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Managua",
+  weekday: "short",
+}).format(new Date());
+
+if (
+  nicaraguaWeekday === "Sun" &&
+  process.env.GITHUB_EVENT_NAME === "schedule"
+) {
+  console.log(
+    "Hoy es domingo (hora de Nicaragua). La Gaceta no opera ni publica actualizaciones; se omite la comprobación programada.",
+  );
+  process.exit(0);
+}
+
 const escapeHtml = (value) =>
   String(value)
     .replace(/&/g, "&amp;")
