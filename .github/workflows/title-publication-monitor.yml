@@ -1,0 +1,45 @@
+name: Monitor title publication
+
+on:
+  schedule:
+    - cron: "0 16 * * *"
+    - cron: "30 20 * * *"
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: title-publication-monitor
+  cancel-in-progress: false
+
+jobs:
+  check-publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: actions/cache/restore@v5
+        with:
+          path: .title-monitor-state
+          key: lagaceta-title-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            lagaceta-title-monitor-
+
+      - name: Check La Gaceta and notify Telegram
+        run: node scripts/check-lagaceta-title.mjs
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - uses: actions/cache/save@v5
+        if: always()
+        with:
+          path: .title-monitor-state
+          key: lagaceta-title-monitor-${{ github.run_id }}-${{ github.run_attempt }}
