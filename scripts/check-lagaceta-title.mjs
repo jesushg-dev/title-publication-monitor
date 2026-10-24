@@ -41,9 +41,18 @@ const decodeHtml = (value) =>
     .trim();
 
 const extractCells = (row) =>
-  [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((match) =>
-    decodeHtml(match[1]),
-  );
+  [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((match) => {
+    const html = match[1];
+    const linkMatch = html.match(/href="([^"]+)"/i);
+    if (linkMatch) {
+      try {
+        return new URL(linkMatch[1], "https://www.lagaceta.gob.ni").toString();
+      } catch {
+        return linkMatch[1];
+      }
+    }
+    return decodeHtml(html);
+  });
 
 const loadPreviousRecords = async () => {
   try {
@@ -109,7 +118,7 @@ const createRecordMessage = (current, previous) => {
     ["gazetteNumber", "N.º de Gaceta"],
     ["link", "Enlace"],
     ["publicationDate", "Fecha de publicación"],
-    ["errataDate", "Fecha de errata"],
+    ["errataDate", "Fecha de fe de errata"],
   ];
   const changes = previous
     ? trackedFields
@@ -120,31 +129,44 @@ const createRecordMessage = (current, previous) => {
         )
     : [];
 
-  const details = [
-    `<b>📋 ${formatValue(current.registry)}</b>`,
-    `👤 <b>Titular:</b> ${formatValue(current.entity)}`,
-    `🗂️ <b>Trámite:</b> ${formatValue(current.processType)}`,
-    `📥 <b>Ingreso:</b> ${formatValue(current.receivedAt)}`,
+  const statusText =
+    changes.length > 0
+      ? "se detectaron cambios"
+      : "no hay cambios desde la última consulta";
+
+  const lines = [
+    `¡Hola, <b>${escapeHtml(current.entity || "Titular")}</b>! 👋`,
+    "",
+    `Hemos revisado tu título profesional y ${statusText}.`,
+    "",
+    `📋 <b>Registro:</b> ${formatValue(current.registry)}`,
+    `🗂️ <b>Tipo de trámite:</b> ${formatValue(current.processType)}`,
+    `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
     `📌 <b>Estado:</b> ${formatValue(current.status)}`,
     `📰 <b>N.º de Gaceta:</b> ${formatValue(current.gazetteNumber)}`,
     `🔗 <b>Enlace:</b> ${formatValue(current.link)}`,
-    `📅 <b>Publicación:</b> ${formatValue(current.publicationDate)}`,
-    `📝 <b>Fe de errata:</b> ${formatValue(current.errataDate)}`,
+    `📅 <b>Fecha de publicación:</b> ${formatValue(current.publicationDate)}`,
+    `📝 <b>Fecha de fe de errata:</b> ${formatValue(current.errataDate)}`,
   ];
 
-  return [
-    changes.length > 0
-      ? "⚠️ <b>Cambios detectados</b>"
-      : previous
-        ? "🟢 Sin cambios desde la última consulta."
-        : "🔎 Primera comprobación.",
-    ...changes,
-    ...details,
-  ].join("\n");
+  if (changes.length > 0) {
+    lines.push("", "🔄 <b>Detalle de los cambios:</b>", ...changes);
+  }
+
+  lines.push("", "Te mantendremos informado sobre cualquier actualización.");
+
+  return lines.join("\n");
 };
 
 const createFailureMessage = (registry, error) =>
-  `⚠️ <b>${escapeHtml(registry)}</b>: no fue posible confirmar el estado. ${escapeHtml(error.message)}`;
+  [
+    `⚠️ <b>Registro ${escapeHtml(registry)}</b>`,
+    "",
+    "No fue posible consultar el estado del título en La Gaceta en este momento.",
+    `<b>Error:</b> ${escapeHtml(error.message)}`,
+    "",
+    "Te mantendremos informado en la próxima comprobación.",
+  ].join("\n");
 
 const notifyTelegram = async (message) => {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -184,21 +206,22 @@ for (const registry of registries) {
   }
 }
 
-const message = [
-  "<b>🔔 Estado de títulos profesionales</b>",
-  ...results.flatMap((result) => [
-    "",
-    result.current
-      ? createRecordMessage(
-          result.current,
-          previousRecords[result.current.registry],
-        )
-      : createFailureMessage(result.registry, result.error),
-  ]),
-].join("\n");
+const messages = results.map((result) =>
+  result.current
+    ? createRecordMessage(
+        result.current,
+        previousRecords[result.current.registry],
+      )
+    : createFailureMessage(result.registry, result.error),
+);
 
-if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
-  await notifyTelegram(message);
+for (const msg of messages) {
+  if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
+    await notifyTelegram(msg);
+    if (messages.length > 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
 }
 
 const updatedRecords = Object.fromEntries(
@@ -217,4 +240,4 @@ await writeFile(
   )}\n`,
 );
 
-console.log(message);
+console.log(messages.join("\n\n" + "=".repeat(40) + "\n\n"));
