@@ -5,12 +5,12 @@ on:
     branches:
       - main
   schedule:
-    - cron: "30 14 * * 1-6"
-    - cron: "30 16 * * 1-6"
-    - cron: "0 18 * * 1-6"
-    - cron: "30 19 * * 1-6"
-    - cron: "30 21 * * 1-6"
-    - cron: "15 23 * * 1-6"
+    - cron: "30 14 * * 1-5"
+    - cron: "30 16 * * 1-5"
+    - cron: "0 18 * * 1-5"
+    - cron: "30 19 * * 1-5"
+    - cron: "30 21 * * 1-5"
+    - cron: "15 23 * * 1-5"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +44,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
 
       - name: Save record and estimate JSON
         uses: actions/upload-artifact@v7

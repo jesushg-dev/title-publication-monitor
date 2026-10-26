@@ -20,21 +20,6 @@ const stateDirectory =
   process.env.TITLE_MONITOR_STATE_DIRECTORY ?? ".title-monitor-state";
 const statePath = path.join(stateDirectory, "state.json");
 
-const nicaraguaWeekday = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Managua",
-  weekday: "short",
-}).format(new Date());
-
-if (
-  nicaraguaWeekday === "Sun" &&
-  process.env.GITHUB_EVENT_NAME === "schedule"
-) {
-  console.log(
-    "Hoy es domingo (hora de Nicaragua). La Gaceta no opera ni publica actualizaciones; se omite la comprobación programada.",
-  );
-  process.exit(0);
-}
-
 const escapeHtml = (value) =>
   String(value)
     .replace(/&/g, "&amp;")
@@ -274,15 +259,17 @@ const formatQueue = (queue, status) => {
   ].join("\n");
 };
 
-const loadPreviousRecords = async () => {
+const loadPreviousState = async () => {
   try {
     const savedState = JSON.parse(await readFile(statePath, "utf8"));
 
-    if (savedState.registry) return { [savedState.registry]: savedState };
+    if (savedState.registry) {
+      return { records: { [savedState.registry]: savedState } };
+    }
 
-    return savedState.records ?? {};
+    return savedState;
   } catch (error) {
-    if (error.code === "ENOENT") return {};
+    if (error.code === "ENOENT") return { records: {} };
     throw error;
   }
 };
@@ -427,7 +414,8 @@ const notifyTelegram = async (message, inlineKeyboard = []) => {
   }
 };
 
-const previousRecords = await loadPreviousRecords();
+const previousState = await loadPreviousState();
+const previousRecords = previousState.records ?? {};
 const results = [];
 
 for (const target of targets) {
@@ -524,6 +512,34 @@ const timeStr =
 
 const allChanges = results.flatMap((r) => r.changes);
 const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
+const hasChanges = allChanges.length > 0 || anyNewlyDiscovered;
+const hasErrors = results.some((result) => result.error);
+const localDate = today.toISOString().slice(0, 10);
+const eventName = process.env.GITHUB_EVENT_NAME;
+const isScheduledEvent = eventName === "schedule";
+const isFinalSchedule =
+  isScheduledEvent && process.env.GITHUB_EVENT_SCHEDULE?.trim() === "15 23 * * 1-5";
+const priorDailyStatus = previousState.dailyStatus;
+const sameDayStatus = priorDailyStatus?.date === localDate;
+const dayHadChanges = sameDayStatus && priorDailyStatus.hadChanges;
+const dayHadErrors = sameDayStatus && priorDailyStatus.hadErrors;
+const noChangeReportAlreadySent =
+  sameDayStatus && priorDailyStatus.noChangeReportSent;
+const sendNotification =
+  !isScheduledEvent ||
+  hasChanges ||
+  hasErrors ||
+  (isFinalSchedule &&
+    !dayHadChanges &&
+    !dayHadErrors &&
+    !noChangeReportAlreadySent);
+const sentDailyNoChangeReport =
+  sendNotification &&
+  isFinalSchedule &&
+  !hasChanges &&
+  !hasErrors &&
+  !dayHadChanges &&
+  !dayHadErrors;
 
 let headerTitle = "🎓 <b>MONITOR DE TÍTULOS — LA GACETA</b>";
 if (anyNewlyDiscovered) {
@@ -575,10 +591,13 @@ const blocks = results.map((result) => {
   return lines.join("\n");
 });
 
-const footer =
-  allChanges.length > 0 || anyNewlyDiscovered
-    ? "Te mantendremos informado ante cualquier nueva actualización."
-    : "🔔 <i>Sin cambios desde la última comprobación.</i>";
+const footer = hasChanges
+  ? "Te avisaremos cuando haya otra actualización."
+  : hasErrors
+    ? "⚠️ <i>Al menos un registro no se pudo confirmar.</i>"
+    : sentDailyNoChangeReport
+      ? "🔔 <i>Sin cambios en los registros durante las comprobaciones de hoy.</i>"
+      : "🔔 <i>Sin cambios desde la última comprobación.</i>";
 
 const dashboardMessage = [
   headerTitle,
@@ -613,8 +632,10 @@ for (const { current } of results) {
 }
 
 // Send Consolidated Dashboard via Telegram
-if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
+if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   await notifyTelegram(dashboardMessage, inlineKeyboard);
+} else if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
+  console.log("Sin cambios para notificar; se omite el mensaje intermedio del día.");
 }
 
 // Save Updated State
@@ -641,6 +662,14 @@ await writeFile(
     {
       checkedAt: now.toISOString(),
       records: { ...activePreviousRecords, ...updatedRecords },
+      dailyStatus: {
+        date: localDate,
+        hadChanges: Boolean(dayHadChanges || hasChanges),
+        hadErrors: Boolean(dayHadErrors || hasErrors),
+        noChangeReportSent: Boolean(
+          noChangeReportAlreadySent || sentDailyNoChangeReport,
+        ),
+      },
       estimates: Object.fromEntries(
         results
           .filter(({ current, queue }) => current?.registry && queue)
