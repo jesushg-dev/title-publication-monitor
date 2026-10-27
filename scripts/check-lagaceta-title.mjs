@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import path from "node:path";
 
 const defaultRegistries = [
@@ -412,6 +413,30 @@ const notifyTelegram = async (message, inlineKeyboard = []) => {
   if (!response.ok) {
     throw new Error(`Telegram respondió HTTP ${response.status}.`);
   }
+
+  const sentMessage = await response.json();
+  if (!sentMessage.ok || !Number.isInteger(sentMessage.result?.message_id)) {
+    throw new Error("Telegram no devolvió el identificador del mensaje enviado.");
+  }
+  return sentMessage.result.message_id;
+};
+
+const deleteTelegramMessage = async (messageId) => {
+  const response = await fetch(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        message_id: messageId,
+      }),
+    },
+  );
+  const deletedMessage = await response.json();
+  if (!response.ok || !deletedMessage.ok) {
+    throw new Error(`Telegram no pudo borrar el mensaje anterior (HTTP ${response.status}).`);
+  }
 };
 
 const previousState = await loadPreviousState();
@@ -491,6 +516,22 @@ for (const result of results) {
   result.queue = yearRecords
     ? calculateQueue(result.current.registry, result.current.receivedAt, yearRecords, today)
     : null;
+  const previousQueue = previousState.estimates?.[result.current?.registry];
+  result.progressChanges = previousQueue && result.queue
+    ? [
+        ["pendingAhead", "TP anteriores pendientes"],
+        ["publishedSinceRegistration", "TP publicados desde el ingreso"],
+        ["initialPending", "TP pendientes al ingresar"],
+      ]
+        .filter(([field]) =>
+          Number.isFinite(previousQueue[field]) &&
+          Number.isFinite(result.queue[field]) &&
+          previousQueue[field] !== result.queue[field],
+        )
+        .map(([field, label]) =>
+          `• <b>${label}:</b> ${previousQueue[field].toLocaleString("es-NI")} → ${result.queue[field].toLocaleString("es-NI")}`,
+        )
+    : [];
 }
 
 // Build the Dashboard Message
@@ -510,15 +551,16 @@ const timeStr =
   }) +
   " (Managua)";
 
-const allChanges = results.flatMap((r) => r.changes);
+const allRecordChanges = results.flatMap((r) => r.changes);
+const allProgressChanges = results.flatMap((r) => r.progressChanges);
 const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
-const hasChanges = allChanges.length > 0 || anyNewlyDiscovered;
+const hasChanges = allRecordChanges.length > 0 || allProgressChanges.length > 0 || anyNewlyDiscovered;
 const hasErrors = results.some((result) => result.error);
 const localDate = today.toISOString().slice(0, 10);
 const eventName = process.env.GITHUB_EVENT_NAME;
 const isScheduledEvent = eventName === "schedule";
 const isFinalSchedule =
-  isScheduledEvent && process.env.GITHUB_EVENT_SCHEDULE?.trim() === "15 23 * * 1-5";
+  isScheduledEvent && process.env.GITHUB_EVENT_SCHEDULE?.trim() === "45 20 * * 1-5";
 const priorDailyStatus = previousState.dailyStatus;
 const sameDayStatus = priorDailyStatus?.date === localDate;
 const dayHadChanges = sameDayStatus && priorDailyStatus.hadChanges;
@@ -544,8 +586,10 @@ const sentDailyNoChangeReport =
 let headerTitle = "🎓 <b>MONITOR DE TÍTULOS — LA GACETA</b>";
 if (anyNewlyDiscovered) {
   headerTitle = "🎉 <b>¡NUEVO TÍTULO INGRESADO A LA GACETA!</b> 🎉\n\n" + headerTitle;
-} else if (allChanges.length > 0) {
+} else if (allRecordChanges.length > 0) {
   headerTitle = "🚨 <b>¡CAMBIO DETECTADO EN TU TRÁMITE!</b> 🚨\n\n" + headerTitle;
+} else if (allProgressChanges.length > 0) {
+  headerTitle = "📈 <b>¡CAMBIÓ EL PROGRESO DE TU TÍTULO!</b>\n\n" + headerTitle;
 }
 
 const blocks = results.map((result) => {
@@ -556,7 +600,7 @@ const blocks = results.map((result) => {
     ].join("\n");
   }
 
-  const { current, changes, isNewlyDiscovered } = result;
+  const { current, changes, progressChanges, isNewlyDiscovered } = result;
 
   if (current.isPending) {
     return [
@@ -584,8 +628,8 @@ const blocks = results.map((result) => {
 
   if (isNewlyDiscovered) {
     lines.push("", "🎉 <b>¡Tu título ya fue ingresado al sistema de La Gaceta!</b>");
-  } else if (changes.length > 0) {
-    lines.push("", "🔄 <b>Cambios detectados:</b>", ...changes);
+  } else if (changes.length > 0 || progressChanges.length > 0) {
+    lines.push("", "🔄 <b>Cambios detectados:</b>", ...changes, ...progressChanges);
   }
 
   return lines.join("\n");
@@ -631,9 +675,29 @@ for (const { current } of results) {
   }
 }
 
-// Send Consolidated Dashboard via Telegram
+// Send a new message so Telegram can notify the chat, then remove the last one.
+let lastTelegramMessage = previousState.lastTelegramMessage ?? null;
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
-  await notifyTelegram(dashboardMessage, inlineKeyboard);
+  const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
+  const previousMessage = lastTelegramMessage;
+  const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
+    .update(String(process.env.TELEGRAM_CHAT_ID))
+    .digest("hex");
+  lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
+  const previousSentAt = Date.parse(previousMessage?.sentAt);
+  if (
+    Number.isInteger(previousMessage?.messageId) &&
+    previousMessage.messageId !== messageId &&
+    previousMessage.chatFingerprint === chatFingerprint &&
+    Number.isFinite(previousSentAt) &&
+    now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
+  ) {
+    try {
+      await deleteTelegramMessage(previousMessage.messageId);
+    } catch (error) {
+      console.warn(error.message);
+    }
+  }
 } else if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
   console.log("Sin cambios para notificar; se omite el mensaje intermedio del día.");
 }
@@ -654,6 +718,12 @@ const activePreviousRecords = Object.fromEntries(
     targets.some((target) => previousRecords[target]?.registry === key),
   ),
 );
+const activePreviousEstimates = Object.fromEntries(
+  Object.entries(previousState.estimates ?? {}).filter(([registry]) =>
+    targets.includes(registry) ||
+    targets.some((target) => previousRecords[target]?.registry === registry),
+  ),
+);
 
 await mkdir(stateDirectory, { recursive: true });
 await writeFile(
@@ -662,6 +732,7 @@ await writeFile(
     {
       checkedAt: now.toISOString(),
       records: { ...activePreviousRecords, ...updatedRecords },
+      lastTelegramMessage,
       dailyStatus: {
         date: localDate,
         hadChanges: Boolean(dayHadChanges || hasChanges),
@@ -670,11 +741,14 @@ await writeFile(
           noChangeReportAlreadySent || sentDailyNoChangeReport,
         ),
       },
-      estimates: Object.fromEntries(
-        results
-          .filter(({ current, queue }) => current?.registry && queue)
-          .map(({ current, queue }) => [current.registry, queue]),
-      ),
+      estimates: {
+        ...activePreviousEstimates,
+        ...Object.fromEntries(
+          results
+            .filter(({ current, queue }) => current?.registry && queue)
+            .map(({ current, queue }) => [current.registry, queue]),
+        ),
+      },
     },
     null,
     2,
