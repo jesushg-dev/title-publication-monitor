@@ -96,6 +96,22 @@ const excludedDatesBetween = (start, end, extendedClosure = false) => {
   return days;
 };
 
+const holidayDatesInBlock = (days) => {
+  const weeks = new Set(days.map((date) => {
+    const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+    return dateKey(addDays(date, -daysSinceMonday));
+  }));
+  const holidays = [];
+  for (const monday of weeks) {
+    for (let offset = 0; offset < 5; offset++) {
+      const date = addDays(new Date(`${monday}T00:00:00Z`), offset);
+      const reason = getExcludedReason(date);
+      if (reason) holidays.push({ date: dateKey(date), reason });
+    }
+  }
+  return holidays;
+};
+
 const calculateForecast = (today, pendingAhead, publishedDates) => {
   const sampleDays = [];
   for (let offset = 1; sampleDays.length < 40 && offset <= 120; offset++) {
@@ -111,17 +127,40 @@ const calculateForecast = (today, pendingAhead, publishedDates) => {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const weeklyRates = [];
+  const normalWeeklyRates = [];
+  const excludedHolidayBlocks = [];
   for (let block = 0; block < 8; block++) {
-    const count = sampleDays.slice(block * 5, block * 5 + 5)
+    const blockDays = sampleDays.slice(block * 5, block * 5 + 5);
+    const count = blockDays
       .reduce((sum, date) => sum + (counts.get(dateKey(date)) ?? 0), 0);
-    weeklyRates.push(count / 5);
+    const rate = count / 5;
+    weeklyRates.push(rate);
+    const holidays = holidayDatesInBlock(blockDays);
+    if (holidays.length) {
+      excludedHolidayBlocks.push({
+        from: dateKey(blockDays[0]),
+        to: dateKey(blockDays.at(-1)),
+        holidays,
+      });
+    } else {
+      normalWeeklyRates.push(rate);
+    }
   }
 
   const eightWeekRate = weeklyRates.reduce((sum, rate) => sum + rate, 0) / 8;
-  const fourWeekRate = weeklyRates.slice(4).reduce((sum, rate) => sum + rate, 0) / 4;
-  const averagePerPublicationDay = (eightWeekRate + fourWeekRate) / 2;
-  const slowRate = Math.min(fourWeekRate, eightWeekRate);
-  const fastRate = Math.max(fourWeekRate, eightWeekRate);
+  const recentFour = normalWeeklyRates.slice(-4);
+  const recentTwo = normalWeeklyRates.slice(-2);
+  const fourWeekRate = recentFour.length === 4
+    ? recentFour.reduce((sum, rate) => sum + rate, 0) / 4
+    : null;
+  const twoWeekRate = recentTwo.length === 2
+    ? recentTwo.reduce((sum, rate) => sum + rate, 0) / 2
+    : null;
+  const averagePerPublicationDay = fourWeekRate === null || twoWeekRate === null
+    ? 0
+    : (fourWeekRate + twoWeekRate) / 2;
+  const slowRate = Math.min(fourWeekRate ?? 0, twoWeekRate ?? 0);
+  const fastRate = Math.max(fourWeekRate ?? 0, twoWeekRate ?? 0);
   const toRange = (extendedClosure) => ({
     from: projectDate(today, pendingAhead, fastRate, extendedClosure),
     expected: projectDate(today, pendingAhead, averagePerPublicationDay, extendedClosure),
@@ -134,12 +173,15 @@ const calculateForecast = (today, pendingAhead, publishedDates) => {
   const calendarEnd = lastDate ? new Date(`${lastDate}T00:00:00Z`) : today;
 
   return {
-    method: "four-and-eight-publication-week-sensitivity-v2",
+    method: "two-and-four-normal-publication-week-sensitivity-v3",
     averagePerPublicationDay,
+    twoWeekRate,
     fourWeekRate,
     eightWeekRate,
     weeklyRates,
+    excludedHolidayBlocks,
     samplePublicationDays: sampleDays.length,
+    ratePublicationDays: recentFour.length * 5,
     sampleFrom: dateKey(sampleDays[0]),
     sampleTo: dateKey(sampleDays.at(-1)),
     range,

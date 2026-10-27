@@ -575,7 +575,7 @@ const dashboardMessage = [
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
-  "<i>Ventana orientativa según promedios de 4 y 8 semanas hábiles; no es una fecha garantizada.</i>",
+  "<i>Ventana orientativa según las últimas 2 y 4 semanas activas; se omiten semanas con feriados.</i>",
   footer,
 ].join("\n");
 

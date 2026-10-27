@@ -83,6 +83,16 @@ test("sin publicaciones recientes no inventa fechas", () => {
   assert.deepEqual(queue.forecast.range, { from: null, expected: null, to: null });
 });
 
+test("los asuetos de noviembre tampoco reducen el ritmo histórico", () => {
+  const today = utcDate("2026-11-20");
+  const queue = calculateQueue("2026-TP2000", "15/10/2026", fixture(today), today);
+  const ignoredDates = queue.forecast.excludedHolidayBlocks
+    .flatMap(({ holidays }) => holidays.map(({ date }) => date));
+  assert.ok(ignoredDates.includes("2026-11-02"));
+  assert.ok(ignoredDates.includes("2026-11-09"));
+  assert.equal(queue.forecast.averagePerPublicationDay, 20);
+});
+
 test("un avance real reduce los pendientes sin cambiar por TP posteriores", () => {
   const today = utcDate("2026-10-27");
   const yearRecords = fixture(today);
@@ -137,7 +147,7 @@ test("el caso de 3058 a 3252 publicaciones no proyecta sobre fines de semana", (
   }
 });
 
-test("las tasas reales de octubre producen una ventana basada en 4 y 8 semanas", () => {
+test("las tasas reales omiten la semana de feriados y priorizan las últimas semanas", () => {
   const today = utcDate("2026-10-27");
   const days = [];
   for (let offset = 1; days.length < 40; offset++) {
@@ -164,15 +174,19 @@ test("las tasas reales de octubre producen una ventana basada en 4 y 8 semanas",
   assert.equal(queue.pendingAhead, 6_805);
   assert.equal(queue.forecast.fourWeekRate, 152.3);
   assert.ok(Math.abs(queue.forecast.eightWeekRate - 116.575) < 1e-9);
-  assert.ok(Math.abs(queue.forecast.averagePerPublicationDay - 134.4375) < 1e-9);
+  assert.equal(queue.forecast.twoWeekRate, 222.9);
+  assert.ok(Math.abs(queue.forecast.averagePerPublicationDay - 187.6) < 1e-9);
+  assert.deepEqual(queue.forecast.excludedHolidayBlocks[0].holidays.map(({ date }) => date), [
+    "2026-09-14", "2026-09-15",
+  ]);
   assert.deepEqual(queue.forecast.range, {
-    from: "2027-01-12",
-    expected: "2027-01-21",
-    to: "2027-02-03",
+    from: "2026-12-14",
+    expected: "2026-12-22",
+    to: "2027-01-12",
   });
   assert.deepEqual(queue.forecast.extendedClosure, {
-    from: "2027-01-15",
-    expected: "2027-01-26",
-    to: "2027-02-08",
+    from: "2026-12-14",
+    expected: "2027-01-05",
+    to: "2027-01-15",
   });
 });
