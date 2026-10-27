@@ -33,6 +33,9 @@ test("excluye asuetos, feriados, fines de semana y vacaciones públicas", () => 
   assert.match(getExcludedReason(utcDate("2026-12-24")), /Vacaciones/);
   assert.match(getExcludedReason(utcDate("2027-01-01")), /Vacaciones/);
   assert.match(getExcludedReason(utcDate("2027-01-18")), /Rubén/);
+  assert.equal(getExcludedReason(utcDate("2027-03-25")), "Jueves Santo");
+  assert.equal(getExcludedReason(utcDate("2027-03-26")), "Viernes Santo");
+  assert.equal(getExcludedReason(utcDate("2027-03-29")), null);
   assert.match(getExcludedReason(utcDate("2026-11-08")), /Fin de semana/);
   assert.equal(getExcludedReason(utcDate("2027-01-04")), null);
   assert.equal(getExcludedReason(utcDate("2026-12-21")), null);
@@ -132,4 +135,44 @@ test("el caso de 3058 a 3252 publicaciones no proyecta sobre fines de semana", (
   for (const date of [after.forecast.range.from, after.forecast.range.expected, after.forecast.range.to]) {
     assert.equal(getExcludedReason(utcDate(date)), null);
   }
+});
+
+test("las tasas reales de octubre producen una ventana basada en 4 y 8 semanas", () => {
+  const today = utcDate("2026-10-27");
+  const days = [];
+  for (let offset = 1; days.length < 40; offset++) {
+    const date = new Date(today.getTime() - offset * dayMs);
+    if (!getExcludedReason(date)) days.push(date);
+  }
+  days.reverse();
+  const weeklyCounts = [536, 513, 198, 370, 366, 451, 1_134, 1_095];
+  const records = new Map();
+  let number = 1;
+  for (let block = 0; block < weeklyCounts.length; block++) {
+    for (let index = 0; index < weeklyCounts[block]; index++) {
+      records.set(number++, {
+        status: "Publicado",
+        publicationDate: officialDate(days[block * 5]),
+      });
+    }
+  }
+  for (let index = 0; index < 6_805; index++) {
+    records.set(number++, { status: "Redactado", publicationDate: "-" });
+  }
+  records.set(number, { status: "Redactado" });
+  const queue = calculateQueue(`2026-TP${number}`, null, { records, source: "official rates fixture" }, today);
+  assert.equal(queue.pendingAhead, 6_805);
+  assert.equal(queue.forecast.fourWeekRate, 152.3);
+  assert.ok(Math.abs(queue.forecast.eightWeekRate - 116.575) < 1e-9);
+  assert.ok(Math.abs(queue.forecast.averagePerPublicationDay - 134.4375) < 1e-9);
+  assert.deepEqual(queue.forecast.range, {
+    from: "2027-01-12",
+    expected: "2027-01-21",
+    to: "2027-02-03",
+  });
+  assert.deepEqual(queue.forecast.extendedClosure, {
+    from: "2027-01-15",
+    expected: "2027-01-26",
+    to: "2027-02-08",
+  });
 });

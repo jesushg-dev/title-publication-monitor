@@ -75,14 +75,6 @@ const parseOfficialDate = (value) => {
     : null;
 };
 
-const percentile = (values, fraction) => {
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = (sorted.length - 1) * fraction;
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
-};
-
 const projectDate = (today, pendingAhead, rate, extendedClosure = false) => {
   if (rate <= 0 || pendingAhead <= 0) return null;
   let capacity = 0;
@@ -128,11 +120,8 @@ const calculateForecast = (today, pendingAhead, publishedDates) => {
   const eightWeekRate = weeklyRates.reduce((sum, rate) => sum + rate, 0) / 8;
   const fourWeekRate = weeklyRates.slice(4).reduce((sum, rate) => sum + rate, 0) / 4;
   const averagePerPublicationDay = (eightWeekRate + fourWeekRate) / 2;
-  const rollingFourWeekRates = Array.from({ length: 5 }, (_, index) =>
-    weeklyRates.slice(index, index + 4).reduce((sum, rate) => sum + rate, 0) / 4,
-  );
-  const slowRate = Math.min(averagePerPublicationDay, percentile(rollingFourWeekRates, 0.25));
-  const fastRate = Math.max(averagePerPublicationDay, percentile(rollingFourWeekRates, 0.75));
+  const slowRate = Math.min(fourWeekRate, eightWeekRate);
+  const fastRate = Math.max(fourWeekRate, eightWeekRate);
   const toRange = (extendedClosure) => ({
     from: projectDate(today, pendingAhead, fastRate, extendedClosure),
     expected: projectDate(today, pendingAhead, averagePerPublicationDay, extendedClosure),
@@ -145,7 +134,7 @@ const calculateForecast = (today, pendingAhead, publishedDates) => {
   const calendarEnd = lastDate ? new Date(`${lastDate}T00:00:00Z`) : today;
 
   return {
-    method: "rolling-4-and-8-publication-weeks-v1",
+    method: "four-and-eight-publication-week-sensitivity-v2",
     averagePerPublicationDay,
     fourWeekRate,
     eightWeekRate,

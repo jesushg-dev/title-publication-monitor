@@ -575,7 +575,7 @@ const dashboardMessage = [
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
-  "<i>Rango estimado con días hábiles y ritmo reciente; algunos TP se publican fuera de orden.</i>",
+  "<i>Ventana orientativa según promedios de 4 y 8 semanas hábiles; no es una fecha garantizada.</i>",
   footer,
 ].join("\n");
 
