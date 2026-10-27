@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import path from "node:path";
+import { calculateQueue } from "./forecast.mjs";
 
 const defaultRegistries = [
   "2026-TP30799",
@@ -80,20 +81,8 @@ const extractCells = (row) =>
     return decodeHtml(html);
   });
 
-const dayMs = 24 * 60 * 60 * 1000;
-
 const getRegistryParts = (registry) =>
   /^(\d{4})-TP(\d+)$/i.exec(registry ?? "");
-
-const parseOfficialDate = (value) => {
-  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value ?? "");
-  if (!match) return null;
-
-  const date = new Date(Date.UTC(+match[3], +match[2] - 1, +match[1]));
-  return date.getUTCDate() === +match[1] && date.getUTCMonth() === +match[2] - 1
-    ? date
-    : null;
-};
 
 const getManaguaDate = () => {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -148,82 +137,6 @@ const fetchYearRecords = async (year) => {
   };
 };
 
-const calculateQueue = (registry, receivedAt, yearRecords, today) => {
-  const parts = getRegistryParts(registry);
-  if (!parts || !yearRecords?.records.has(Number(parts[2]))) return null;
-
-  const targetNumber = Number(parts[2]);
-  const targetRecord = yearRecords.records.get(targetNumber);
-  const registrationDate = parseOfficialDate(receivedAt);
-  const cutoff = today.getTime() - 29 * dayMs;
-  let publishedAhead = 0;
-  let pendingAhead = 0;
-  let publishedLast30Days = 0;
-  let initialPending = 0;
-  let publishedSinceRegistration = 0;
-  let missingReceiptDates = 0;
-  let missingPublicationDates = 0;
-
-  for (const [number, record] of yearRecords.records) {
-    if (number >= targetNumber) continue;
-    const isPublished = /^publicado$/i.test(record.status);
-    const publicationDate = parseOfficialDate(record.publicationDate);
-    if (isPublished) {
-      publishedAhead++;
-      if (
-        publicationDate &&
-        publicationDate.getTime() >= cutoff &&
-        publicationDate.getTime() <= today.getTime()
-      ) {
-        publishedLast30Days++;
-      }
-    } else {
-      pendingAhead++;
-    }
-
-    if (!registrationDate) continue;
-    const priorReceivedAt = parseOfficialDate(record.receivedAt);
-    if (!priorReceivedAt) {
-      missingReceiptDates++;
-      continue;
-    }
-    if (priorReceivedAt.getTime() > registrationDate.getTime()) continue;
-    if (isPublished && !publicationDate) {
-      missingPublicationDates++;
-      continue;
-    }
-    if (!isPublished || publicationDate.getTime() > registrationDate.getTime()) {
-      initialPending++;
-      if (isPublished) publishedSinceRegistration++;
-    }
-  }
-
-  const totalAhead = publishedAhead + pendingAhead;
-  const dailyRate = publishedLast30Days / 30;
-  const daysRemaining =
-    dailyRate > 0 && pendingAhead > 0 && !/^publicado$/i.test(targetRecord.status)
-      ? Math.ceil(pendingAhead / dailyRate)
-      : null;
-  const estimatedDate = daysRemaining === null
-    ? null
-    : new Date(today.getTime() + daysRemaining * dayMs).toISOString().slice(0, 10);
-
-  return {
-    registry,
-    source: yearRecords.source,
-    publishedAhead,
-    pendingAhead,
-    totalAhead,
-    publishedLast30Days,
-    estimatedDate,
-    registrationDate: registrationDate?.toISOString().slice(0, 10) ?? null,
-    initialPending,
-    publishedSinceRegistration,
-    missingReceiptDates,
-    missingPublicationDates,
-  };
-};
-
 const formatQueue = (queue, status) => {
   if (!queue || !queue.totalAhead) {
     return "📈 <b>Avance y fecha:</b> no disponibles";
@@ -237,15 +150,20 @@ const formatQueue = (queue, status) => {
   const filled = Math.round((ratio ?? 0) * 10);
   const percentage = Math.round((ratio ?? 0) * 100);
   const count = queue.pendingAhead.toLocaleString("es-NI");
-  const rate = queue.publishedLast30Days.toLocaleString("es-NI");
-  const date = queue.estimatedDate
-    ? new Intl.DateTimeFormat("es-NI", {
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-        timeZone: "UTC",
-      }).format(new Date(`${queue.estimatedDate}T00:00:00Z`))
+  const formatDate = (date) => date && new Intl.DateTimeFormat("es-NI", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${date}T00:00:00Z`));
+  const rangeText = (range) => range?.from && range?.to
+    ? `${formatDate(range.from)} – ${formatDate(range.to)}`
     : null;
+  const mainRange = rangeText(queue.forecast?.range);
+  const alternateRange = rangeText(queue.forecast?.extendedClosure);
+  const rate = queue.forecast?.averagePerPublicationDay.toLocaleString("es-NI", {
+    maximumFractionDigits: 1,
+  });
 
   return [
     ratio === null
@@ -254,9 +172,17 @@ const formatQueue = (queue, status) => {
     `⏳ <b>TP anteriores pendientes:</b> ${count}`,
     /^publicado$/i.test(status)
       ? "✅ <b>Tu título ya fue publicado.</b>"
-      : date
-        ? `🗓️ <b>Fecha estimada:</b> aprox. ${date} (${rate} publicados en 30 días)`
-        : "🗓️ <b>Fecha estimada:</b> no disponible con los datos recientes",
+      : queue.pendingAhead === 0
+        ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
+      : mainRange
+        ? [
+            `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
+            `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil`,
+            alternateRange && alternateRange !== mainRange
+              ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
+              : null,
+          ].filter(Boolean).join("\n")
+        : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
   ].join("\n");
 };
 
@@ -649,7 +575,7 @@ const dashboardMessage = [
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
-  "<i>Estimación según el ritmo de 30 días; algunos TP se publican fuera de orden.</i>",
+  "<i>Rango estimado con días hábiles y ritmo reciente; algunos TP se publican fuera de orden.</i>",
   footer,
 ].join("\n");
 

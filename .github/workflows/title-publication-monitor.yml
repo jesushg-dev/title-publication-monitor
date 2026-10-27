@@ -31,6 +31,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Test publication forecast
+        run: node --test scripts/*.test.mjs
+
       - uses: actions/cache/restore@v5
         with:
           path: .title-monitor-state
