@@ -5,12 +5,12 @@ on:
     branches:
       - main
   schedule:
+    - cron: "0 10 * * 1-5"
     - cron: "0 12 * * 1-5"
-    - cron: "0 14 * * 1-5"
-    - cron: "30 15 * * 1-5"
+    - cron: "30 13 * * 1-5"
+    - cron: "0 15 * * 1-5"
     - cron: "0 17 * * 1-5"
-    - cron: "0 19 * * 1-5"
-    - cron: "45 20 * * 1-5"
+    - cron: "45 18 * * 1-5"
   workflow_dispatch:
 
 permissions:
