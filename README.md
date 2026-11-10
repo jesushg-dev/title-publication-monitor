@@ -1,6 +1,6 @@
 # Monitor de publicación de títulos en La Gaceta
 
-El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/title-publication-monitor.yml) consulta los títulos profesionales en La Gaceta de Nicaragua de **lunes a viernes**. Los cron se programan a las 6:00, 8:00, 9:30, 11:00, 13:00 y 14:45, hora de Nicaragua (`America/Managua`): cada horario se adelantó 2 horas y 30 minutos respecto a los anteriores para compensar los retrasos observados en GitHub Actions. GitHub ejecuta los cron en UTC (12:00, 14:00, 15:30, 17:00, 19:00 y 20:45 UTC); el retraso puede variar y la hora de llegada no está garantizada. También se ejecuta al subir cambios a `main`.
+El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/title-publication-monitor.yml) consulta los títulos profesionales en La Gaceta de Nicaragua de **lunes a viernes**. Los cron actuales se programan a las 4:00, 6:00, 7:30, 9:00, 11:00 y 12:45, hora de Nicaragua (`America/Managua`). GitHub los ejecuta a las 10:00, 12:00, 13:30, 15:00, 17:00 y 18:45 UTC; el retraso puede variar y la hora de llegada no está garantizada. También se ejecuta al subir cambios a `main`.
 
 ### 👥 Títulos monitoreados:
 - `2026-TP30799`: Jesús Enmanuel Hernández González

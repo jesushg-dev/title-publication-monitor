@@ -486,7 +486,7 @@ const localDate = today.toISOString().slice(0, 10);
 const eventName = process.env.GITHUB_EVENT_NAME;
 const isScheduledEvent = eventName === "schedule";
 const isFinalSchedule =
-  isScheduledEvent && process.env.GITHUB_EVENT_SCHEDULE?.trim() === "45 20 * * 1-5";
+  isScheduledEvent && process.env.GITHUB_EVENT_SCHEDULE?.trim() === "45 18 * * 1-5";
 const priorDailyStatus = previousState.dailyStatus;
 const sameDayStatus = priorDailyStatus?.date === localDate;
 const dayHadChanges = sameDayStatus && priorDailyStatus.hadChanges;
