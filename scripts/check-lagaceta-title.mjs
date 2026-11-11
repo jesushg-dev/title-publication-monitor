@@ -137,7 +137,7 @@ const fetchYearRecords = async (year) => {
   };
 };
 
-const formatQueue = (queue, status) => {
+const formatQueue = (queue, status, showRate = true) => {
   if (!queue || !queue.totalAhead) {
     return "📈 <b>Avance y fecha:</b> no disponibles";
   }
@@ -177,7 +177,7 @@ const formatQueue = (queue, status) => {
       : mainRange
         ? [
             `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
-            `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil`,
+            showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
             alternateRange && alternateRange !== mainRange
               ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
               : null,
@@ -446,7 +446,6 @@ for (const result of results) {
   result.progressChanges = previousQueue && result.queue
     ? [
         ["pendingAhead", "TP anteriores pendientes"],
-        ["publishedSinceRegistration", "TP publicados desde el ingreso"],
         ["initialPending", "TP pendientes al ingresar"],
       ]
         .filter(([field]) =>
@@ -518,6 +517,15 @@ if (anyNewlyDiscovered) {
   headerTitle = "📈 <b>¡CAMBIÓ EL PROGRESO DE TU TÍTULO!</b>\n\n" + headerTitle;
 }
 
+const activeRates = results
+  .filter(({ current, queue }) => current && !current.isPending &&
+    !/^publicado$/i.test(current.status) && queue?.forecast?.range?.from)
+  .map(({ queue }) => queue.forecast.averagePerPublicationDay);
+const sharedRate = activeRates.length > 1 &&
+  activeRates.every((rate) => Math.abs(rate - activeRates[0]) < 0.05)
+    ? activeRates[0]
+    : null;
+
 const blocks = results.map((result) => {
   if (result.error) {
     return [
@@ -543,7 +551,7 @@ const blocks = results.map((result) => {
     `📌 <b>Estado:</b> ${formatStatusBadge(current.status)}`,
     `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code>`,
     `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-    formatQueue(result.queue, current.status),
+    formatQueue(result.queue, current.status, sharedRate === null),
   ];
 
   if (current.gazetteNumber !== "-") {
@@ -572,12 +580,13 @@ const footer = hasChanges
 const dashboardMessage = [
   headerTitle,
   `📅 <i>${timeStr}</i>`,
+  sharedRate === null ? null : `📊 <b>Ritmo común:</b> ≈${sharedRate.toLocaleString("es-NI", { maximumFractionDigits: 1 })} TP por día hábil`,
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
   "<i>Ventana orientativa según las últimas 2 y 4 semanas activas; se omiten semanas con feriados.</i>",
   footer,
-].join("\n");
+].filter(Boolean).join("\n");
 
 // Interactive Buttons (Inline Keyboard)
 const inlineKeyboard = [
