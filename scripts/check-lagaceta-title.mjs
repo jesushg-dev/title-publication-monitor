@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import path from "node:path";
 import { calculateQueue } from "./forecast.mjs";
 import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
+import { formatWhatsAppMessage, getWhatsAppConfig, notifyWhatsApp } from "./whatsapp.mjs";
 
 const defaultRegistries = [
   "2026-TP30799",
@@ -661,38 +662,60 @@ for (const { current } of results) {
 
 // Send a new message so Telegram can notify the chat, then remove the last one.
 let lastTelegramMessage = previousState.lastTelegramMessage ?? null;
+const notificationErrors = [];
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
-  const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
-  for (const { current, screenshot } of results) {
-    if (!screenshot) continue;
-    try {
-      await notifyTelegramPhoto(screenshot, current, messageId);
-      current.pdfVerification.photoSent = true;
-    } catch (error) {
-      console.warn(error.message);
+  try {
+    const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
+    for (const { current, screenshot } of results) {
+      if (!screenshot) continue;
+      try {
+        await notifyTelegramPhoto(screenshot, current, messageId);
+        current.pdfVerification.photoSent = true;
+      } catch (error) {
+        console.warn(error.message);
+      }
     }
+    const previousMessage = lastTelegramMessage;
+    const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
+      .update(String(process.env.TELEGRAM_CHAT_ID))
+      .digest("hex");
+    lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
+    const previousSentAt = Date.parse(previousMessage?.sentAt);
+    if (
+      Number.isInteger(previousMessage?.messageId) &&
+      previousMessage.messageId !== messageId &&
+      previousMessage.chatFingerprint === chatFingerprint &&
+      Number.isFinite(previousSentAt) &&
+      now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
+    ) {
+      try {
+        await deleteTelegramMessage(previousMessage.messageId);
+      } catch (error) {
+        console.warn(error.message);
+      }
+    }
+  } catch (error) {
+    notificationErrors.push(error);
   }
-  const previousMessage = lastTelegramMessage;
-  const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
-    .update(String(process.env.TELEGRAM_CHAT_ID))
-    .digest("hex");
-  lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
-  const previousSentAt = Date.parse(previousMessage?.sentAt);
-  if (
-    Number.isInteger(previousMessage?.messageId) &&
-    previousMessage.messageId !== messageId &&
-    previousMessage.chatFingerprint === chatFingerprint &&
-    Number.isFinite(previousSentAt) &&
-    now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
-  ) {
+
+  const whatsAppConfig = getWhatsAppConfig();
+  if (whatsAppConfig) {
     try {
-      await deleteTelegramMessage(previousMessage.messageId);
+      await notifyWhatsApp(
+        whatsAppConfig,
+        formatWhatsAppMessage(dashboardMessage, inlineKeyboard),
+        results.filter(({ screenshot }) => Boolean(screenshot)),
+      );
     } catch (error) {
-      console.warn(error.message);
+      notificationErrors.push(error);
     }
   }
 } else if (process.env.TITLE_MONITOR_DRY_RUN !== "true") {
   console.log("Sin cambios para notificar; se omite el mensaje intermedio del día.");
+}
+
+if (notificationErrors.length > 0) {
+  throw new AggregateError(notificationErrors, "No se pudo completar el envío de las notificaciones.");
 }
 
 // Save Updated State

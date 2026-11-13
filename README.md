@@ -14,6 +14,7 @@ El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/t
 - **🗓️ Ventana orientativa:** Cuenta todos los TP anteriores pendientes, incluidos los rezagados. Toma los últimos 40 días hábiles como historial y separa bloques de cinco días. Omite del cálculo de velocidad los bloques que abarcan semanas con feriados o asuetos; combina los promedios de los dos y cuatro bloques normales más recientes para la fecha central. Los extremos muestran qué sucede si continúa uno u otro promedio. Así, los descansos extraordinarios no se interpretan como una desaceleración permanente. Los TP con número mayor que el consultado no afectan este cálculo. La ventana puede adelantarse o atrasarse cuando cambian los pendientes o el ritmo; no es un intervalo estadístico ni una fecha garantizada.
 - **📆 Calendario de publicación:** La proyección omite fines de semana, feriados nacionales, los asuetos del 2 y 9 de noviembre de 2026 y las vacaciones del sector público del 24 de diciembre al 1 de enero. Muestra aparte qué pasaría si el cierre comenzara al salir el 18 de diciembre y se reanudara el 4 de enero. Si la búsqueda completa falla o no hay publicaciones recientes, el monitor no inventa una fecha.
 - **🔘 Botones interactivos en Telegram:** Acceso directo a la página oficial de consultas y enlace de lectura de la edición de La Gaceta cuando un título sea publicado.
+- **📱 WhatsApp opcional:** Si se configuran Whapi y al menos un destinatario, el mismo aviso también se envía por WhatsApp. Incluye enlaces oficiales y la página resaltada cuando corresponda. Sin esa configuración, Telegram sigue funcionando solo.
 - **📄 Página verificada en el PDF:** Cuando un título figura como «Publicado» y la fila ofrece un PDF oficial, el monitor busca el nombre completo en sus páginas. Si aparece en una sola página, muestra su número, un botón para abrirla y envía una imagen de la página completa con el nombre resaltado. Si no puede ubicar el texto con precisión, conserva el enlace sin enviar una imagen dudosa. Una verificación lograda después de la publicación genera un aviso y queda guardada en el JSON.
 - **🚨 Alertas de cambios prioritarias:** Si se detecta un cambio de estado, número de Gaceta o ingreso oficial de un título pendiente, se destaca inmediatamente en la cabecera del mensaje.
 
@@ -27,11 +28,21 @@ El flujo [`.github/workflows/title-publication-monitor.yml`](.github/workflows/t
    - `TELEGRAM_CHAT_ID`: el `chat.id` que obtuviste.
 5. Abre **Actions → Monitor title publication → Run workflow** para comprobar el primer mensaje.
 
+### WhatsApp con Whapi.Cloud (opcional)
+
+1. Vincula un número de WhatsApp a [Whapi.Cloud](https://whapi.cloud/docs) y copia el token del canal.
+2. En **Settings → Secrets and variables → Actions → Secrets**, crea:
+   - `WHAPI_TOKEN`: token del canal.
+   - `WHAPI_RECIPIENTS`: números destinatarios con código de país, sin `+` ni espacios, separados por comas. Ejemplo: `50588888888,50577777777`. También se puede usar un ID de grupo válido de Whapi.
+3. Para suspender WhatsApp sin borrar los secretos, crea la variable de Actions `WHATSAPP_DISABLED` con valor `true`. Cambia el valor a `false` o elimina la variable para volver a activarlo.
+
+WhatsApp solo se usa cuando existen ambos secretos y `WHATSAPP_DISABLED` no es `true`. Telegram sigue recibiendo los avisos. Cada destinatario recibe su propio mensaje y, cuando hay una página verificada, su imagen. El Sandbox gratuito de Whapi tiene límites de uso; consulta su [página de precios](https://whapi.cloud/price). Si falla un canal, el workflow informa el error e intenta el otro; la ejecución fallida no sustituye el último estado guardado.
+
 Los registros confirmados y sus estimaciones se guardan como JSON en `.title-monitor-state/state.json` dentro de la caché de GitHub Actions. Cada ejecución correcta también adjunta ese archivo para descargarlo en **Actions → ejecución → Artifacts → title-records-...**. GitHub conserva el adjunto durante 90 días. Si la caché vence o se elimina, la siguiente ejecución se identificará como la primera comprobación y luego continuará comparando normalmente.
 
 Cada entrada de `estimates` incluye `forecast`: promedio por día hábil, ritmos recientes de dos y cuatro bloques normales, bloques omitidos por feriados, muestra usada, rango principal, rango con cierre extendido y fechas excluidas. Los cambios de estimación por sí solos no activan una alerta; los cambios reales en los registros o en los TP pendientes sí lo hacen.
 
-Para probar la consulta localmente sin enviar Telegram, ejecuta:
+Para probar la consulta localmente sin enviar avisos, ejecuta:
 
 ```bash
 TITLE_MONITOR_DRY_RUN=true node scripts/check-lagaceta-title.mjs

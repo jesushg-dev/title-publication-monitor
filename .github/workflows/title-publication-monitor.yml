@@ -43,11 +43,14 @@ jobs:
           restore-keys: |
             lagaceta-title-monitor-
 
-      - name: Check La Gaceta and notify Telegram
+      - name: Check La Gaceta and notify subscribers
         run: node scripts/check-lagaceta-title.mjs
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WHAPI_TOKEN: ${{ secrets.WHAPI_TOKEN }}
+          WHAPI_RECIPIENTS: ${{ secrets.WHAPI_RECIPIENTS }}
+          WHATSAPP_DISABLED: ${{ vars.WHATSAPP_DISABLED }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
 
