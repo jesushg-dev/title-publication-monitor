@@ -517,6 +517,17 @@ const allProgressChanges = results.flatMap((r) => r.progressChanges);
 const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
 const hasChanges = allRecordChanges.length > 0 || allProgressChanges.length > 0 || anyNewlyDiscovered;
 const hasPhotoToSend = results.some(({ screenshot }) => Boolean(screenshot));
+const previewDirectory = process.env.TITLE_MONITOR_PREVIEW_DIRECTORY;
+if (previewDirectory && process.env.TITLE_MONITOR_DRY_RUN === "true") {
+  await mkdir(previewDirectory, { recursive: true });
+  for (const { current, screenshot } of results) {
+    if (!screenshot) continue;
+    const filename = `${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}-pagina-${current.pdfVerification.page}.png`;
+    const imagePath = path.join(previewDirectory, filename);
+    await writeFile(imagePath, screenshot);
+    console.log(`Vista previa de la página resaltada: ${imagePath}`);
+  }
+}
 const hasErrors = results.some((result) => result.error);
 const localDate = today.toISOString().slice(0, 10);
 const eventName = process.env.GITHUB_EVENT_NAME;

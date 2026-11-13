@@ -48,6 +48,19 @@ Para probar la consulta localmente sin enviar avisos, ejecuta:
 TITLE_MONITOR_DRY_RUN=true node scripts/check-lagaceta-title.mjs
 ```
 
+En **CMD de Windows**, para consultar un solo registro y guardar la página resaltada sin enviar mensajes:
+
+```bat
+set "TITLE_MONITOR_TARGETS=2026-TP23820"
+set "TITLE_MONITOR_DRY_RUN=true"
+set "TITLE_MONITOR_STATE_DIRECTORY=.title-monitor-preview-state"
+set "TITLE_MONITOR_PREVIEW_DIRECTORY=preview"
+node scripts/check-lagaceta-title.mjs
+dir preview
+```
+
+El PNG se guarda como `preview\2026-TP23820-pagina-N.png` cuando La Gaceta indica «Publicado», ofrece un PDF y el nombre completo se encuentra en una página única. El comando muestra el estado y la página del PDF aunque no se pueda generar la imagen. La carpeta de estado separada evita modificar la caché usada por el monitor.
+
 Para probar únicamente el cálculo sin consultar La Gaceta ni Telegram:
 
 ```bash
