@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { findUniqueNamePage, verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 
 test("solo acepta el nombre completo en una página única", () => {
@@ -39,14 +40,27 @@ test("lee el PDF y devuelve la página verificada", async () => {
     headers: { "content-type": "application/pdf" },
   });
   try {
-    assert.deepEqual(await verifyPublicationPdf(
+    const { screenshot, ...verification } = await verifyPublicationPdf(
       "https://www.lagaceta.gob.ni/media/titulo.pdf",
       "Jesús Enmanuel Hernández González",
-    ), {
+    );
+    assert.deepEqual(verification, {
       status: "verified",
       page: 1,
       url: "https://www.lagaceta.gob.ni/media/titulo.pdf#page=1",
     });
+    assert.ok(Buffer.isBuffer(screenshot));
+    const image = await loadImage(screenshot);
+    assert.ok(image.width > 800 && image.height > 1000);
+    const canvas = createCanvas(image.width, image.height);
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, image.width, image.height).data;
+    let highlighted = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index] > 180 && pixels[index + 1] > 150 && pixels[index + 2] < 150) highlighted++;
+    }
+    assert.ok(highlighted > 100, "El nombre debe estar resaltado en la página completa");
   } finally {
     globalThis.fetch = originalFetch;
   }

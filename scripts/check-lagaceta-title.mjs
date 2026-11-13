@@ -348,6 +348,21 @@ const notifyTelegram = async (message, inlineKeyboard = []) => {
   return sentMessage.result.message_id;
 };
 
+const notifyTelegramPhoto = async (screenshot, current, messageId) => {
+  const form = new FormData();
+  form.append("chat_id", process.env.TELEGRAM_CHAT_ID);
+  form.append("caption", `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`);
+  form.append("reply_parameters", JSON.stringify({ message_id: messageId }));
+  form.append("photo", new Blob([screenshot], { type: "image/png" }), "pagina-resaltada.png");
+  const response = await fetch(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+    { method: "POST", body: form },
+  );
+  if (!response.ok || !(await response.json()).ok) {
+    throw new Error(`Telegram no pudo enviar la imagen (HTTP ${response.status}).`);
+  }
+};
+
 const deleteTelegramMessage = async (messageId) => {
   const response = await fetch(
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/deleteMessage`,
@@ -384,14 +399,18 @@ for (const target of targets) {
       previousRecords[target] ??
       (current.registry ? previousRecords[current.registry] : null);
 
+    let screenshot = null;
     if (/^publicado$/i.test(current.status)) {
-      current.pdfVerification =
+      const verification =
         prev?.link === current.link && prev?.entity === current.entity &&
-        prev?.pdfVerification?.status === "verified"
+        prev?.pdfVerification?.status === "verified" && prev.pdfVerification.photoSent === true
           ? prev.pdfVerification
           : current.link && current.link !== "-"
             ? await verifyPublicationPdf(current.link, current.entity)
             : { status: "unverified", page: null };
+      const { screenshot: renderedScreenshot, ...metadata } = verification;
+      screenshot = renderedScreenshot ?? null;
+      current.pdfVerification = { ...metadata, photoSent: prev?.pdfVerification?.photoSent === true };
     }
 
     const trackedFields = [
@@ -429,6 +448,7 @@ for (const target of targets) {
       current,
       prev,
       changes,
+      screenshot,
       isNewlyDiscovered,
       error: null,
     });
@@ -495,6 +515,7 @@ const allRecordChanges = results.flatMap((r) => r.changes);
 const allProgressChanges = results.flatMap((r) => r.progressChanges);
 const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
 const hasChanges = allRecordChanges.length > 0 || allProgressChanges.length > 0 || anyNewlyDiscovered;
+const hasPhotoToSend = results.some(({ screenshot }) => Boolean(screenshot));
 const hasErrors = results.some((result) => result.error);
 const localDate = today.toISOString().slice(0, 10);
 const eventName = process.env.GITHUB_EVENT_NAME;
@@ -510,6 +531,7 @@ const noChangeReportAlreadySent =
 const sendNotification =
   !isScheduledEvent ||
   hasChanges ||
+  hasPhotoToSend ||
   hasErrors ||
   (isFinalSchedule &&
     !dayHadChanges &&
@@ -641,6 +663,15 @@ for (const { current } of results) {
 let lastTelegramMessage = previousState.lastTelegramMessage ?? null;
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
+  for (const { current, screenshot } of results) {
+    if (!screenshot) continue;
+    try {
+      await notifyTelegramPhoto(screenshot, current, messageId);
+      current.pdfVerification.photoSent = true;
+    } catch (error) {
+      console.warn(error.message);
+    }
+  }
   const previousMessage = lastTelegramMessage;
   const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
     .update(String(process.env.TELEGRAM_CHAT_ID))

@@ -5,6 +5,7 @@
     "test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "1.1.1",
     "pdfjs-dist": "6.5.438"
   }
 }
