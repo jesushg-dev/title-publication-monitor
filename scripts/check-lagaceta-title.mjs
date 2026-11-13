@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import path from "node:path";
 import { calculateQueue } from "./forecast.mjs";
+import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 
 const defaultRegistries = [
   "2026-TP30799",
@@ -383,6 +384,16 @@ for (const target of targets) {
       previousRecords[target] ??
       (current.registry ? previousRecords[current.registry] : null);
 
+    if (/^publicado$/i.test(current.status)) {
+      current.pdfVerification =
+        prev?.link === current.link && prev?.entity === current.entity &&
+        prev?.pdfVerification?.status === "verified"
+          ? prev.pdfVerification
+          : current.link && current.link !== "-"
+            ? await verifyPublicationPdf(current.link, current.entity)
+            : { status: "unverified", page: null };
+    }
+
     const trackedFields = [
       ["receivedAt", "Fecha de ingreso"],
       ["processType", "Tipo de trámite"],
@@ -407,6 +418,10 @@ for (const target of targets) {
           ([field, label]) =>
             `• <b>${label}:</b> ${formatValue(prev[field])} → ${formatValue(current[field])}`,
         );
+      if (current.pdfVerification?.status === "verified" &&
+          prev.pdfVerification?.page !== current.pdfVerification.page) {
+        changes.push(`• <b>Página verificada:</b> ${current.pdfVerification.page}`);
+      }
     }
 
     results.push({
@@ -560,6 +575,12 @@ const blocks = results.map((result) => {
     );
   }
 
+  if (/^publicado$/i.test(current.status)) {
+    lines.push(current.pdfVerification?.status === "verified"
+      ? `📄 <b>Nombre confirmado en el PDF:</b> página ${current.pdfVerification.page}`
+      : "📄 <b>Página del PDF:</b> pendiente de verificar");
+  }
+
   if (isNewlyDiscovered) {
     lines.push("", "🎉 <b>¡Tu título ya fue ingresado al sistema de La Gaceta!</b>");
   } else if (changes.length > 0 || progressChanges.length > 0) {
@@ -607,6 +628,12 @@ for (const { current } of results) {
         url: current.link,
       },
     ]);
+  }
+  if (current?.pdfVerification?.status === "verified") {
+    inlineKeyboard.push([{
+      text: `📄 Abrir página ${current.pdfVerification.page} (${current.entity?.split(" ")[0] ?? "Título"})`,
+      url: current.pdfVerification.url,
+    }]);
   }
 }
 
