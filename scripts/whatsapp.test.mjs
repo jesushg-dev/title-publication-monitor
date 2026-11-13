@@ -33,10 +33,10 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ message: { id: `message-${calls.length}` } }), { status: 200 });
   };
   try {
-    await notifyWhatsApp(
+    const sent = await notifyWhatsApp(
       { token: "token-de-prueba", recipients: ["50588888888", "50577777777"] },
       "*Aviso*",
       [{
@@ -59,6 +59,22 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
     const image = JSON.parse(calls[1].options.body);
     assert.match(image.media, /^data:image\/png;name=pagina-resaltada\.png;base64,AQID$/);
     assert.match(image.caption, /PERSONA DE PRUEBA — página 2/);
+    assert.equal(Object.keys(sent).length, 2);
+    assert.deepEqual(Object.values(sent).map(({ ids }) => ids), [["message-1", "message-2"], ["message-3", "message-4"]]);
+
+    calls.length = 0;
+    await notifyWhatsApp(
+      { token: "token-de-prueba", recipients: ["50588888888", "50577777777"] },
+      "*Nuevo aviso*",
+      [],
+      sent,
+    );
+    assert.deepEqual(calls.filter(({ options }) => options.method === "DELETE").map(({ url }) => url), [
+      "https://gate.whapi.cloud/messages/message-1",
+      "https://gate.whapi.cloud/messages/message-2",
+      "https://gate.whapi.cloud/messages/message-3",
+      "https://gate.whapi.cloud/messages/message-4",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

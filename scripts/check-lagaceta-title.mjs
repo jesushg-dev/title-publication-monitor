@@ -662,6 +662,7 @@ for (const { current } of results) {
 
 // Send a new message so Telegram can notify the chat, then remove the last one.
 let lastTelegramMessage = previousState.lastTelegramMessage ?? null;
+let lastWhatsAppMessages = previousState.lastWhatsAppMessages ?? {};
 const notificationErrors = [];
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   try {
@@ -701,10 +702,11 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   const whatsAppConfig = getWhatsAppConfig();
   if (whatsAppConfig) {
     try {
-      await notifyWhatsApp(
+      lastWhatsAppMessages = await notifyWhatsApp(
         whatsAppConfig,
         formatWhatsAppMessage(dashboardMessage, inlineKeyboard),
         results.filter(({ screenshot }) => Boolean(screenshot)),
+        lastWhatsAppMessages,
       );
     } catch (error) {
       notificationErrors.push(error);
@@ -749,6 +751,7 @@ await writeFile(
       checkedAt: now.toISOString(),
       records: { ...activePreviousRecords, ...updatedRecords },
       lastTelegramMessage,
+      lastWhatsAppMessages,
       dailyStatus: {
         date: localDate,
         hadChanges: Boolean(dayHadChanges || hasChanges),

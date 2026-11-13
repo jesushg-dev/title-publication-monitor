@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 const apiBase = "https://gate.whapi.cloud/messages";
 
 export const getWhatsAppConfig = (env = process.env) => {
@@ -39,17 +41,39 @@ const post = async (endpoint, token, body) => {
   if (!response.ok) {
     throw new Error(`Whapi respondió HTTP ${response.status} al enviar ${endpoint}.`);
   }
+  const result = await response.json();
+  if (!result.message?.id) throw new Error("Whapi no devolvió el ID del mensaje enviado.");
+  return result.message.id;
 };
 
-export const notifyWhatsApp = async (config, message, photos = []) => {
+const deleteMessage = async (token, id) => {
+  const response = await fetch(`${apiBase}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error(`Whapi respondió HTTP ${response.status} al borrar el mensaje anterior.`);
+};
+
+export const notifyWhatsApp = async (config, message, photos = [], previous = {}) => {
+  const sent = { ...previous };
   for (const recipient of config.recipients) {
-    await post("text", config.token, { to: recipient, body: message });
+    const fingerprint = createHmac("sha256", config.token).update(recipient).digest("hex");
+    const ids = [await post("text", config.token, { to: recipient, body: message })];
     for (const { screenshot, current } of photos) {
-      await post("image", config.token, {
+      ids.push(await post("image", config.token, {
         to: recipient,
         media: `data:image/png;name=pagina-resaltada.png;base64,${Buffer.from(screenshot).toString("base64")}`,
         caption: `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`,
-      });
+      }));
     }
+    for (const id of previous[fingerprint]?.ids ?? []) {
+      try {
+        await deleteMessage(config.token, id);
+      } catch (error) {
+        console.warn(error.message);
+      }
+    }
+    sent[fingerprint] = { ids, sentAt: new Date().toISOString() };
   }
+  return sent;
 };
