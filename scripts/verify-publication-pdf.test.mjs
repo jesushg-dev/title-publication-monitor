@@ -40,7 +40,7 @@ test("lee el PDF y devuelve la página verificada", async () => {
     headers: { "content-type": "application/pdf" },
   });
   try {
-    const { screenshot, ...verification } = await verifyPublicationPdf(
+    const { screenshot, document, ...verification } = await verifyPublicationPdf(
       "https://www.lagaceta.gob.ni/media/titulo.pdf",
       "Jesús Enmanuel Hernández González",
     );
@@ -49,6 +49,7 @@ test("lee el PDF y devuelve la página verificada", async () => {
       page: 1,
       url: "https://www.lagaceta.gob.ni/media/titulo.pdf#page=1",
     });
+    assert.deepEqual(document, makePdf("JESUS ENMANUEL HERNANDEZ GONZALEZ"));
     assert.ok(Buffer.isBuffer(screenshot));
     const image = await loadImage(screenshot);
     assert.ok(image.width > 800 && image.height > 1000);
@@ -93,6 +94,7 @@ test("sigue la edición intermedia y extrae el PDF incorporado", async () => {
     assert.equal(result.page, 1);
     assert.match(result.url, /la-gaceta-no-195.*#page=1$/);
     assert.ok(Buffer.isBuffer(result.screenshot));
+    assert.deepEqual(result.document, pdf);
   } finally {
     globalThis.fetch = originalFetch;
   }

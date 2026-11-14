@@ -13,6 +13,15 @@ export const getWhatsAppConfig = (env = process.env) => {
   return { token, recipients };
 };
 
+export const publicationDocumentKey = (current) =>
+  [current.registry, current.gazetteNumber, current.publicationDate, current.link].join("|");
+
+export const needsWhatsAppDocument = (config, previous, current) =>
+  Boolean(config?.recipients.some((recipient) => {
+    const fingerprint = createHmac("sha256", config.token).update(recipient).digest("hex");
+    return !(previous[fingerprint]?.documentKeys ?? []).includes(publicationDocumentKey(current));
+  }));
+
 export const formatWhatsAppMessage = (html, links = []) => {
   const message = html
     .replace(/<b>(.*?)<\/b>/gs, "*$1*")
@@ -56,17 +65,32 @@ const deleteMessage = async (token, id) => {
   if (result.success !== true) throw new Error("Whapi no confirmó el borrado del mensaje anterior.");
 };
 
-export const notifyWhatsApp = async (config, message, photos = [], previous = {}) => {
+export const notifyWhatsApp = async (config, message, media = [], previous = {}) => {
   const sent = { ...previous };
   for (const recipient of config.recipients) {
     const fingerprint = createHmac("sha256", config.token).update(recipient).digest("hex");
     const ids = [await post("text", config.token, { to: recipient, body: message })];
-    for (const { screenshot, current } of photos) {
+    for (const { screenshot, current } of media) {
+      if (!screenshot) continue;
       ids.push(await post("image", config.token, {
         to: recipient,
         media: `data:image/png;name=pagina-resaltada.png;base64,${Buffer.from(screenshot).toString("base64")}`,
         caption: `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`,
       }));
+    }
+    const documentKeys = [...(previous[fingerprint]?.documentKeys ?? [])];
+    for (const { document, current } of media) {
+      if (!document) continue;
+      const key = publicationDocumentKey(current);
+      if (documentKeys.includes(key)) continue;
+      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
+      await post("document", config.token, {
+        to: recipient,
+        media: `data:application/pdf;name=${filename};base64,${Buffer.from(document).toString("base64")}`,
+        filename,
+        caption: `📄 La Gaceta N.º ${current.gazetteNumber} — ${current.entity}. Nombre en la página ${current.pdfVerification.page}.`,
+      });
+      documentKeys.push(key);
     }
     const pendingDeleteIds = [];
     const previousIds = [
@@ -82,7 +106,7 @@ export const notifyWhatsApp = async (config, message, photos = [], previous = {}
       }
     }
     console.log(`WhatsApp: Whapi confirmó ${previousIds.length - pendingDeleteIds.length} borrado(s); ${pendingDeleteIds.length} pendiente(s) de reintento.`);
-    sent[fingerprint] = { ids, pendingDeleteIds, sentAt: new Date().toISOString() };
+    sent[fingerprint] = { ids, pendingDeleteIds, documentKeys, sentAt: new Date().toISOString() };
   }
   return sent;
 };

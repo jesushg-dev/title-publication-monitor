@@ -3,7 +3,8 @@ import { createHmac } from "node:crypto";
 import path from "node:path";
 import { calculateQueue } from "./forecast.mjs";
 import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
-import { formatWhatsAppMessage, getWhatsAppConfig, notifyWhatsApp } from "./whatsapp.mjs";
+import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
+import { notifyTelegramDocument } from "./telegram.mjs";
 
 const defaultRegistries = [
   "2026-TP30799",
@@ -385,6 +386,7 @@ const deleteTelegramMessage = async (messageId) => {
 
 const previousState = await loadPreviousState();
 const previousRecords = previousState.records ?? {};
+const whatsAppConfig = getWhatsAppConfig();
 const results = [];
 
 for (const target of targets) {
@@ -402,10 +404,18 @@ for (const target of targets) {
       (current.registry ? previousRecords[current.registry] : null);
 
     let screenshot = null;
+    let document = null;
     if (/^publicado$/i.test(current.status)) {
+      const samePublication =
+        prev?.registry === current.registry &&
+        prev?.link === current.link &&
+        prev?.entity === current.entity &&
+        prev?.gazetteNumber === current.gazetteNumber &&
+        prev?.publicationDate === current.publicationDate;
       const verification =
-        prev?.link === current.link && prev?.entity === current.entity &&
-        prev?.pdfVerification?.status === "verified" && prev.pdfVerification.photoSent === true
+        samePublication && prev?.pdfVerification?.status === "verified" &&
+        prev.pdfVerification.photoSent === true && prev.pdfVerification.documentSent === true &&
+        !needsWhatsAppDocument(whatsAppConfig, previousState.lastWhatsAppMessages ?? {}, current)
           ? prev.pdfVerification
           : current.link && current.link !== "-"
             ? await verifyPublicationPdf(current.link, current.entity, {
@@ -413,9 +423,14 @@ for (const target of targets) {
                 publicationDate: current.publicationDate,
               })
             : { status: "unverified", page: null };
-      const { screenshot: renderedScreenshot, ...metadata } = verification;
+      const { screenshot: renderedScreenshot, document: verifiedDocument, ...metadata } = verification;
       screenshot = renderedScreenshot ?? null;
-      current.pdfVerification = { ...metadata, photoSent: prev?.pdfVerification?.photoSent === true };
+      document = verifiedDocument ?? null;
+      current.pdfVerification = {
+        ...metadata,
+        photoSent: samePublication && prev?.pdfVerification?.photoSent === true,
+        documentSent: samePublication && prev?.pdfVerification?.documentSent === true,
+      };
     }
 
     const trackedFields = [
@@ -454,6 +469,7 @@ for (const target of targets) {
       prev,
       changes,
       screenshot,
+      document,
       isNewlyDiscovered,
       error: null,
     });
@@ -520,7 +536,11 @@ const allRecordChanges = results.flatMap((r) => r.changes);
 const allProgressChanges = results.flatMap((r) => r.progressChanges);
 const anyNewlyDiscovered = results.some((r) => r.isNewlyDiscovered);
 const hasChanges = allRecordChanges.length > 0 || allProgressChanges.length > 0 || anyNewlyDiscovered;
-const hasPhotoToSend = results.some(({ screenshot }) => Boolean(screenshot));
+const hasPhotoToSend = results.some(({ screenshot, current }) =>
+  Boolean(screenshot && !current.pdfVerification.photoSent));
+const hasDocumentToSend = results.some(({ document, current }) =>
+  Boolean(document && (!current.pdfVerification.documentSent ||
+    needsWhatsAppDocument(whatsAppConfig, previousState.lastWhatsAppMessages ?? {}, current))));
 const previewDirectory = process.env.TITLE_MONITOR_PREVIEW_DIRECTORY;
 if (previewDirectory && process.env.TITLE_MONITOR_DRY_RUN === "true") {
   await mkdir(previewDirectory, { recursive: true });
@@ -548,6 +568,7 @@ const sendNotification =
   !isScheduledEvent ||
   hasChanges ||
   hasPhotoToSend ||
+  hasDocumentToSend ||
   hasErrors ||
   (isFinalSchedule &&
     !dayHadChanges &&
@@ -684,13 +705,22 @@ const notificationErrors = [];
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   try {
     const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
-    for (const { current, screenshot } of results) {
-      if (!screenshot) continue;
-      try {
-        await notifyTelegramPhoto(screenshot, current, messageId);
-        current.pdfVerification.photoSent = true;
-      } catch (error) {
-        console.warn(error.message);
+    for (const { current, screenshot, document } of results) {
+      if (screenshot && !current.pdfVerification.photoSent) {
+        try {
+          await notifyTelegramPhoto(screenshot, current, messageId);
+          current.pdfVerification.photoSent = true;
+        } catch (error) {
+          console.warn(error.message);
+        }
+      }
+      if (document && !current.pdfVerification.documentSent) {
+        try {
+          await notifyTelegramDocument(document, current, messageId);
+          current.pdfVerification.documentSent = true;
+        } catch (error) {
+          console.warn(error.message);
+        }
       }
     }
     const previousMessage = lastTelegramMessage;
@@ -716,13 +746,12 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
     notificationErrors.push(error);
   }
 
-  const whatsAppConfig = getWhatsAppConfig();
   if (whatsAppConfig) {
     try {
       lastWhatsAppMessages = await notifyWhatsApp(
         whatsAppConfig,
         formatWhatsAppMessage(dashboardMessage, inlineKeyboard),
-        results.filter(({ screenshot }) => Boolean(screenshot)),
+        results.filter(({ screenshot, document }) => Boolean(screenshot || document)),
         lastWhatsAppMessages,
       );
     } catch (error) {

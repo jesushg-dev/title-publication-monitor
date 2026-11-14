@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatWhatsAppMessage, getWhatsAppConfig, notifyWhatsApp } from "./whatsapp.mjs";
+import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
 
 test("WhatsApp se habilita solo con token, destinatarios y sin flag", () => {
   const configured = {
@@ -104,5 +104,46 @@ test("conserva los ID cuyo borrado no confirmó Whapi y los reintenta", async ()
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
+  }
+});
+
+test("envía el PDF al grupo una vez y conserva el documento al reemplazar avisos", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (options.method === "DELETE") return new Response('{"success":true}', { status: 200 });
+    return new Response(JSON.stringify({ message: { id: `message-${calls.length}` } }), { status: 200 });
+  };
+  const config = { token: "token", recipients: ["120363426827575325@g.us"] };
+  const current = {
+    registry: "2026-TP23820", gazetteNumber: "195", publicationDate: "23/10/2026",
+    link: "https://www.lagaceta.gob.ni/ediciones?search=23%2F10%2F2026",
+    entity: "NAYELIS DE LOS ANGELES SOTELO RODRIGUEZ", pdfVerification: { page: 98 },
+  };
+  try {
+    assert.equal(needsWhatsAppDocument(config, {}, current), true);
+    const first = await notifyWhatsApp(config, "Primer aviso", [{
+      current, document: Buffer.from("%PDF-test"), screenshot: Buffer.from([1, 2, 3]),
+    }]);
+    assert.deepEqual(calls.slice(0, 3).map(({ url }) => url.split("/").at(-1)), ["text", "image", "document"]);
+    const payload = JSON.parse(calls[2].options.body);
+    assert.equal(payload.to, config.recipients[0]);
+    assert.match(payload.media, /^data:application\/pdf;name=La-Gaceta-195-2026-TP23820\.pdf;base64,/);
+    assert.equal(payload.filename, "La-Gaceta-195-2026-TP23820.pdf");
+    assert.match(payload.caption, /NAYELIS.*página 98/);
+    assert.equal(needsWhatsAppDocument(config, first, current), false);
+    assert.deepEqual(Object.values(first)[0].ids, ["message-1", "message-2"]);
+
+    calls.length = 0;
+    const second = await notifyWhatsApp(config, "Segundo aviso", [{
+      current, document: Buffer.from("%PDF-test"),
+    }], first);
+    assert.equal(calls.some(({ url }) => url.endsWith("/document")), false);
+    assert.deepEqual(calls.filter(({ options }) => options.method === "DELETE")
+      .map(({ url }) => url.split("/").at(-1)), ["message-1", "message-2"]);
+    assert.equal(needsWhatsAppDocument(config, second, current), false);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

@@ -125,6 +125,7 @@ const resolvePdf = async (link, edition = {}, depth = 0) => {
 export const verifyPublicationPdf = async (link, name, edition = {}) => {
   try {
     const { data, url } = await resolvePdf(link, edition);
+    const document = Buffer.from(data);
     const task = getDocument({ data, useSystemFonts: true, disableFontFace: true });
     try {
       const pdf = await task.promise;
@@ -148,6 +149,7 @@ export const verifyPublicationPdf = async (link, name, edition = {}) => {
         page,
         url: `${url.toString().split("#")[0]}#page=${page}`,
         screenshot,
+        document,
       };
     } finally {
       await task.destroy();
