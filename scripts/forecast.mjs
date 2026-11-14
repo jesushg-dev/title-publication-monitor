@@ -196,6 +196,9 @@ const calculateForecast = (today, pendingAhead, publishedDates) => {
   };
 };
 
+export const isEligiblePendingStatus = (status) =>
+  /^(redactado|en publicaci[oó]n)$/i.test(String(status ?? "").trim());
+
 export const calculateQueue = (registry, receivedAt, yearRecords, today) => {
   const parts = /^(\d{4})-TP(\d+)$/i.exec(registry ?? "");
   if (!parts || !yearRecords?.records.has(Number(parts[2]))) return null;
@@ -213,11 +216,13 @@ export const calculateQueue = (registry, receivedAt, yearRecords, today) => {
   for (const [number, record] of yearRecords.records) {
     if (number >= targetNumber) continue;
     const isPublished = /^publicado$/i.test(record.status);
+    const isPending = isEligiblePendingStatus(record.status);
+    if (!isPublished && !isPending) continue;
     const publicationDate = parseOfficialDate(record.publicationDate);
     if (isPublished) {
       publishedAhead++;
       if (publicationDate && publicationDate <= today) publishedDates.push(publicationDate);
-    } else {
+    } else if (isPending) {
       pendingAhead++;
     }
 
@@ -232,7 +237,7 @@ export const calculateQueue = (registry, receivedAt, yearRecords, today) => {
       missingPublicationDates++;
       continue;
     }
-    if (!isPublished || publicationDate > registrationDate) {
+    if (isPending || publicationDate > registrationDate) {
       initialPending++;
       if (isPublished) publishedSinceRegistration++;
     }
@@ -244,7 +249,7 @@ export const calculateQueue = (registry, receivedAt, yearRecords, today) => {
     publishedAhead,
     pendingAhead,
     totalAhead: publishedAhead + pendingAhead,
-    forecast: !/^publicado$/i.test(targetRecord.status) && pendingAhead > 0
+    forecast: isEligiblePendingStatus(targetRecord.status) && pendingAhead > 0
       ? calculateForecast(today, pendingAhead, publishedDates)
       : null,
     registrationDate: registrationDate ? dateKey(registrationDate) : null,

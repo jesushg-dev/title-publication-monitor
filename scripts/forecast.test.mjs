@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateQueue, getExcludedReason } from "./forecast.mjs";
+import { calculateQueue, getExcludedReason, isEligiblePendingStatus } from "./forecast.mjs";
 
 const dayMs = 86_400_000;
 const utcDate = (value) => new Date(`${value}T00:00:00Z`);
@@ -107,6 +107,36 @@ test("un avance real reduce los pendientes sin cambiar por TP posteriores", () =
   const later = calculateQueue("2026-TP2000", "15/10/2026", yearRecords, today);
   assert.equal(later.pendingAhead, earlier.pendingAhead - 100);
   assert.ok(later.forecast.range.expected <= earlier.forecast.range.expected);
+});
+
+test("solo Redactado y En publicación cuentan como TP pendientes", () => {
+  assert.equal(isEligiblePendingStatus(" Redactado "), true);
+  assert.equal(isEligiblePendingStatus("EN PUBLICACIÓN"), true);
+  for (const status of ["Editado", "En Redacción", "Ingresado", "Publicado", "-"]) {
+    assert.equal(isEligiblePendingStatus(status), false, status);
+  }
+
+  const today = utcDate("2026-10-27");
+  const yearRecords = {
+    source: "https://www.lagaceta.gob.ni/consultas?t=1&search=2026-TP",
+    records: new Map([
+      [1, { status: "Publicado", receivedAt: "01/09/2026", publicationDate: "26/10/2026" }],
+      [2, { status: "Redactado", receivedAt: "01/09/2026", publicationDate: "-" }],
+      [3, { status: "En publicación", receivedAt: "01/09/2026", publicationDate: "-" }],
+      [4, { status: "Editado", receivedAt: "01/09/2026", publicationDate: "-" }],
+      [5, { status: "En Redacción", receivedAt: "01/09/2026", publicationDate: "-" }],
+      [6, { status: "Ingresado", receivedAt: "01/09/2026", publicationDate: "-" }],
+      [7, { status: "EN PUBLICACIÓN", receivedAt: "15/10/2026", publicationDate: "-" }],
+    ]),
+  };
+  const queue = calculateQueue("2026-TP7", "15/10/2026", yearRecords, today);
+  assert.equal(queue.publishedAhead, 1);
+  assert.equal(queue.pendingAhead, 2);
+  assert.equal(queue.totalAhead, 3);
+  assert.equal(queue.initialPending, 3);
+  assert.equal(queue.publishedSinceRegistration, 1);
+  yearRecords.records.get(7).status = "Editado";
+  assert.equal(calculateQueue("2026-TP7", "15/10/2026", yearRecords, today).forecast, null);
 });
 
 test("el caso de 3058 a 3252 publicaciones no proyecta sobre fines de semana", () => {

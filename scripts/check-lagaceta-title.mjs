@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import path from "node:path";
-import { calculateQueue } from "./forecast.mjs";
+import { calculateQueue, isEligiblePendingStatus } from "./forecast.mjs";
 import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
 import { notifyTelegramDocument } from "./telegram.mjs";
@@ -40,6 +40,7 @@ const formatStatusBadge = (status) => {
   const s = String(status ?? "").trim();
   if (/publicado/i.test(s)) return `🟢 <b>${escapeHtml(s)}</b>`;
   if (/redactado/i.test(s)) return `📝 <b>${escapeHtml(s)}</b>`;
+  if (/en publicaci[oó]n/i.test(s)) return `📣 <b>${escapeHtml(s)}</b>`;
   if (/en redacci/i.test(s)) return `✏️ <b>${escapeHtml(s)}</b>`;
   return `⏳ <b>${escapeHtml(s || "Pendiente")}</b>`;
 };
@@ -495,7 +496,7 @@ const today = getManaguaDate();
 for (const result of results) {
   const year = getRegistryParts(result.current?.registry)?.[1];
   const yearRecords = year ? await yearRequests.get(year) : null;
-  result.queue = yearRecords && !/^publicado$/i.test(result.current.status)
+  result.queue = yearRecords && isEligiblePendingStatus(result.current.status)
     ? calculateQueue(result.current.registry, result.current.receivedAt, yearRecords, today)
     : null;
   const previousQueue = previousState.estimates?.[result.current?.registry];
