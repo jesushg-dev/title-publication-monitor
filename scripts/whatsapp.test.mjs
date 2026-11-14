@@ -33,6 +33,7 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
+    if (options.method === "DELETE") return new Response('{"success":true}', { status: 200 });
     return new Response(JSON.stringify({ message: { id: `message-${calls.length}` } }), { status: 200 });
   };
   try {
@@ -77,5 +78,31 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
     ]);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("conserva los ID cuyo borrado no confirmó Whapi y los reintenta", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const calls = [];
+  console.warn = () => {};
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, method: options.method });
+    if (options.method === "DELETE") {
+      return new Response('{"success":false}', { status: 200 });
+    }
+    return new Response('{"message":{"id":"new-message-1"}}', { status: 200 });
+  };
+  try {
+    const config = { token: "token", recipients: ["120363426827575325@g.us"] };
+    const first = await notifyWhatsApp(config, "Aviso", [], {});
+    const second = await notifyWhatsApp(config, "Otro aviso", [], first);
+    const entry = Object.values(second)[0];
+    assert.deepEqual(entry.pendingDeleteIds, ["new-message-1"]);
+    await notifyWhatsApp(config, "Tercer aviso", [], second);
+    assert.equal(calls.filter(({ method }) => method === "DELETE").length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });

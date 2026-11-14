@@ -52,6 +52,8 @@ const deleteMessage = async (token, id) => {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok) throw new Error(`Whapi respondió HTTP ${response.status} al borrar el mensaje anterior.`);
+  const result = await response.json();
+  if (result.success !== true) throw new Error("Whapi no confirmó el borrado del mensaje anterior.");
 };
 
 export const notifyWhatsApp = async (config, message, photos = [], previous = {}) => {
@@ -66,14 +68,21 @@ export const notifyWhatsApp = async (config, message, photos = [], previous = {}
         caption: `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`,
       }));
     }
-    for (const id of previous[fingerprint]?.ids ?? []) {
+    const pendingDeleteIds = [];
+    const previousIds = [
+      ...(previous[fingerprint]?.pendingDeleteIds ?? []),
+      ...(previous[fingerprint]?.ids ?? []),
+    ];
+    for (const id of new Set(previousIds)) {
       try {
         await deleteMessage(config.token, id);
       } catch (error) {
-        console.warn(error.message);
+        pendingDeleteIds.push(id);
+        console.warn(`No se pudo borrar el aviso anterior de WhatsApp: ${error.message}`);
       }
     }
-    sent[fingerprint] = { ids, sentAt: new Date().toISOString() };
+    console.log(`WhatsApp: Whapi confirmó ${previousIds.length - pendingDeleteIds.length} borrado(s); ${pendingDeleteIds.length} pendiente(s) de reintento.`);
+    sent[fingerprint] = { ids, pendingDeleteIds, sentAt: new Date().toISOString() };
   }
   return sent;
 };

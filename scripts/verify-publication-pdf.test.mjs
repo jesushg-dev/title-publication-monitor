@@ -65,3 +65,35 @@ test("lee el PDF y devuelve la página verificada", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("sigue la edición intermedia y extrae el PDF incorporado", async () => {
+  const originalFetch = globalThis.fetch;
+  const visited = [];
+  const pdf = makePdf("NAYELIS DE LOS ANGELES SOTELO RODRIGUEZ");
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    visited.push(url.pathname);
+    if (url.pathname === "/ediciones") {
+      return new Response('<h1>23/10/2026</h1><a href="/la-gaceta-no-195-viernes-23-de-octubre-de-2026/">Edición</a>', {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    return new Response(`<h1>La Gaceta - No. 195 Viernes 23 de Octubre de 2026</h1><h6>23/10/2026</h6><script>const pdfData = atob('${pdf.toString("base64")}'); const loadingTask = pdfjsLib.getDocument({ data: pdfData });</script>`, {
+      headers: { "content-type": "text/html" },
+    });
+  };
+  try {
+    const result = await verifyPublicationPdf(
+      "https://www.lagaceta.gob.ni/ediciones?search=23%2F10%2F2026",
+      "Nayelis de los Angeles Sotelo Rodriguez",
+      { gazetteNumber: "195", publicationDate: "23/10/2026" },
+    );
+    assert.deepEqual(visited, ["/ediciones", "/la-gaceta-no-195-viernes-23-de-octubre-de-2026/"]);
+    assert.equal(result.status, "verified");
+    assert.equal(result.page, 1);
+    assert.match(result.url, /la-gaceta-no-195.*#page=1$/);
+    assert.ok(Buffer.isBuffer(result.screenshot));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -73,3 +73,38 @@ test("genera el mensaje y el JSON con ambos rangos sin llamar a Telegram", async
     delete process.env.TITLE_MONITOR_DRY_RUN;
   }
 });
+
+test("un título publicado no muestra cola ni estimación de otros TP", async () => {
+  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "title-monitor-published-"));
+  process.env.TITLE_MONITOR_TARGETS = "2026-TP1000";
+  process.env.TITLE_MONITOR_STATE_DIRECTORY = stateDirectory;
+  process.env.TITLE_MONITOR_DRY_RUN = "true";
+  const row = (number) => `<tr class="consulta-row">${[
+    `2026-TP${number}`, "11/08/2026", "TP-TITULO PROFESIONALES",
+    "PERSONA DE PRUEBA", number === 1000 ? "195" : "-", "-",
+    number === 1000 ? "23/10/2026" : "-", "-",
+    number <= 800 || number === 1000 ? "Publicado" : "Editado",
+  ].map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+  const yearHtml = Array.from({ length: 1_000 }, (_, index) => row(index + 1)).join("");
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const messages = [];
+  globalThis.fetch = async (input) => new Response(
+    new URL(input).searchParams.get("search") === "2026-TP" ? yearHtml : row(1_000),
+  );
+  console.log = (...args) => messages.push(args.join(" "));
+  try {
+    await import("./check-lagaceta-title.mjs?published-test");
+    const output = messages.join("\n");
+    assert.match(output, /Tu título ya fue publicado/);
+    assert.doesNotMatch(output, /TP anteriores pendientes|Avance desde el ingreso|Publicación estimada|Ventana orientativa/);
+    const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.estimates["2026-TP1000"], undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    delete process.env.TITLE_MONITOR_TARGETS;
+    delete process.env.TITLE_MONITOR_STATE_DIRECTORY;
+    delete process.env.TITLE_MONITOR_DRY_RUN;
+  }
+});

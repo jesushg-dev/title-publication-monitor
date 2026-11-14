@@ -59,8 +59,7 @@ const renderHighlightedPage = async (page, name) => {
   return canvas.toBuffer("image/png");
 };
 
-const readLimitedPdf = async (response) => {
-  const maxBytes = 50 * 1024 * 1024;
+const readLimitedResponse = async (response, maxBytes) => {
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
@@ -71,21 +70,61 @@ const readLimitedPdf = async (response) => {
   return new Uint8Array(Buffer.concat(chunks));
 };
 
-export const verifyPublicationPdf = async (link, name) => {
+const officialUrl = (link, base) => {
+  const url = new URL(link, base);
+  if (url.protocol !== "https:" || url.hostname !== "www.lagaceta.gob.ni") {
+    throw new Error("El enlace no pertenece a La Gaceta.");
+  }
+  return url;
+};
+
+const resolvePdf = async (link, edition = {}, depth = 0) => {
+  if (depth > 2) throw new Error("La edición contiene demasiadas páginas intermedias.");
+  const url = officialUrl(link);
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(45_000),
+    redirect: "manual",
+  });
+  if (!response.ok) throw new Error(`La Gaceta respondió HTTP ${response.status}.`);
+  const contentType = response.headers.get("content-type") ?? "";
+  const data = await readLimitedResponse(response, /pdf/i.test(contentType) ? 50 * 1024 * 1024 : 15 * 1024 * 1024);
+  if (Buffer.from(data.subarray(0, 5)).toString("ascii") === "%PDF-") {
+    return { data, url };
+  }
+  if (!/html/i.test(contentType)) throw new Error("El enlace no devolvió un PDF ni una página de edición.");
+  const html = Buffer.from(data).toString("utf8");
+
+  if (/\/ediciones\/?$/i.test(url.pathname)) {
+    const number = String(edition.gazetteNumber ?? "").trim();
+    if (!/^\d+$/.test(number) || !html.includes(edition.publicationDate ?? "")) {
+      throw new Error("No se pudo identificar la edición oficial por número y fecha.");
+    }
+    const paths = [...html.matchAll(/href=["']([^"']+)["']/gi)]
+      .map((match) => match[1])
+      .filter((href) => new RegExp(`^/la-gaceta-no-${number}-`, "i").test(href));
+    const unique = [...new Set(paths)];
+    if (unique.length !== 1) throw new Error("La búsqueda no devolvió una edición única.");
+    return resolvePdf(officialUrl(unique[0], url).toString(), edition, depth + 1);
+  }
+
+  if (edition.gazetteNumber && !new RegExp(`La Gaceta\\s*-\\s*No\\.\\s*${edition.gazetteNumber}\\b`, "i").test(html)) {
+    throw new Error("La página no coincide con el número de Gaceta del registro.");
+  }
+  if (edition.publicationDate && !html.includes(edition.publicationDate)) {
+    throw new Error("La página no coincide con la fecha de publicación del registro.");
+  }
+  const embedded = html.match(/const\s+pdfData\s*=\s*atob\(['"]([A-Za-z0-9+/=]+)['"]\)/);
+  if (!embedded) throw new Error("No se encontró el PDF incorporado en la edición.");
+  const pdfData = Buffer.from(embedded[1], "base64");
+  if (pdfData.length > 50 * 1024 * 1024 || pdfData.subarray(0, 5).toString("ascii") !== "%PDF-") {
+    throw new Error("El documento incorporado no es un PDF válido.");
+  }
+  return { data: new Uint8Array(pdfData), url };
+};
+
+export const verifyPublicationPdf = async (link, name, edition = {}) => {
   try {
-    const url = new URL(link);
-    if (url.protocol !== "https:" || url.hostname !== "www.lagaceta.gob.ni") {
-      throw new Error("El enlace no pertenece a La Gaceta.");
-    }
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(45_000),
-      redirect: "manual",
-    });
-    if (!response.ok) throw new Error(`El PDF respondió HTTP ${response.status}.`);
-    const data = await readLimitedPdf(response);
-    if (Buffer.from(data.subarray(0, 5)).toString("ascii") !== "%PDF-") {
-      throw new Error("El enlace no devolvió un PDF.");
-    }
+    const { data, url } = await resolvePdf(link, edition);
     const task = getDocument({ data, useSystemFonts: true, disableFontFace: true });
     try {
       const pdf = await task.promise;

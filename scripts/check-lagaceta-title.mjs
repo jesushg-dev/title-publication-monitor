@@ -140,6 +140,9 @@ const fetchYearRecords = async (year) => {
 };
 
 const formatQueue = (queue, status, showRate = true) => {
+  if (/^publicado$/i.test(status)) {
+    return "✅ <b>Tu título ya fue publicado.</b>";
+  }
   if (!queue || !queue.totalAhead) {
     return "📈 <b>Avance y fecha:</b> no disponibles";
   }
@@ -172,19 +175,17 @@ const formatQueue = (queue, status, showRate = true) => {
       ? "📈 <b>Avance desde el ingreso:</b> no disponible"
       : `📈 <b>Avance desde el ingreso:</b>\n${"█".repeat(filled)}${"░".repeat(10 - filled)} ≈${percentage}%\n${queue.publishedSinceRegistration.toLocaleString("es-NI")} de ${queue.initialPending.toLocaleString("es-NI")} TP pendientes al ingresar`,
     `⏳ <b>TP anteriores pendientes:</b> ${count}`,
-    /^publicado$/i.test(status)
-      ? "✅ <b>Tu título ya fue publicado.</b>"
-      : queue.pendingAhead === 0
-        ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
+    queue.pendingAhead === 0
+      ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
       : mainRange
-        ? [
-            `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
-            showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
-            alternateRange && alternateRange !== mainRange
-              ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
-              : null,
-          ].filter(Boolean).join("\n")
-        : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
+      ? [
+          `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
+          showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
+          alternateRange && alternateRange !== mainRange
+            ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
+            : null,
+        ].filter(Boolean).join("\n")
+      : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
   ].join("\n");
 };
 
@@ -407,7 +408,10 @@ for (const target of targets) {
         prev?.pdfVerification?.status === "verified" && prev.pdfVerification.photoSent === true
           ? prev.pdfVerification
           : current.link && current.link !== "-"
-            ? await verifyPublicationPdf(current.link, current.entity)
+            ? await verifyPublicationPdf(current.link, current.entity, {
+                gazetteNumber: current.gazetteNumber,
+                publicationDate: current.publicationDate,
+              })
             : { status: "unverified", page: null };
       const { screenshot: renderedScreenshot, ...metadata } = verification;
       screenshot = renderedScreenshot ?? null;
@@ -475,7 +479,7 @@ const today = getManaguaDate();
 for (const result of results) {
   const year = getRegistryParts(result.current?.registry)?.[1];
   const yearRecords = year ? await yearRequests.get(year) : null;
-  result.queue = yearRecords
+  result.queue = yearRecords && !/^publicado$/i.test(result.current.status)
     ? calculateQueue(result.current.registry, result.current.receivedAt, yearRecords, today)
     : null;
   const previousQueue = previousState.estimates?.[result.current?.registry];
@@ -639,7 +643,9 @@ const dashboardMessage = [
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
   "───────────────────────────",
-  "<i>Ventana orientativa según las últimas 2 y 4 semanas activas; se omiten semanas con feriados.</i>",
+  activeRates.length > 0
+    ? "<i>Ventana orientativa según las últimas 2 y 4 semanas activas; se omiten semanas con feriados.</i>"
+    : null,
   footer,
 ].filter(Boolean).join("\n");
 
@@ -749,8 +755,10 @@ const activePreviousRecords = Object.fromEntries(
 );
 const activePreviousEstimates = Object.fromEntries(
   Object.entries(previousState.estimates ?? {}).filter(([registry]) =>
-    targets.includes(registry) ||
-    targets.some((target) => previousRecords[target]?.registry === registry),
+    !results.some(({ current }) =>
+      current?.registry === registry && /^publicado$/i.test(current.status)) &&
+    (targets.includes(registry) ||
+    targets.some((target) => previousRecords[target]?.registry === registry)),
   ),
 );
 
