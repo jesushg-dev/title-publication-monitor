@@ -141,10 +141,7 @@ const fetchYearRecords = async (year) => {
   };
 };
 
-const formatQueue = (queue, status, showRate = true) => {
-  if (/^publicado$/i.test(status)) {
-    return "✅ <b>Tu título ya fue publicado.</b>";
-  }
+const formatQueue = (queue, showRate = true) => {
   if (!queue || !queue.totalAhead) {
     return "📈 <b>Avance y fecha:</b> no disponibles";
   }
@@ -173,21 +170,21 @@ const formatQueue = (queue, status, showRate = true) => {
   });
 
   return [
+    queue.pendingAhead === 0
+      ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
+      : mainRange
+        ? [
+            `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
+            showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
+            alternateRange && alternateRange !== mainRange
+              ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
+              : null,
+          ].filter(Boolean).join("\n")
+        : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
     ratio === null
       ? "📈 <b>Avance desde el ingreso:</b> no disponible"
       : `📈 <b>Avance desde el ingreso:</b>\n${"█".repeat(filled)}${"░".repeat(10 - filled)} ≈${percentage}%\n${queue.publishedSinceRegistration.toLocaleString("es-NI")} de ${queue.initialPending.toLocaleString("es-NI")} TP pendientes al ingresar`,
     `⏳ <b>TP anteriores pendientes:</b> ${count}`,
-    queue.pendingAhead === 0
-      ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
-      : mainRange
-      ? [
-          `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
-          showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
-          alternateRange && alternateRange !== mainRange
-            ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
-            : null,
-        ].filter(Boolean).join("\n")
-      : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
   ].join("\n");
 };
 
@@ -362,9 +359,11 @@ const notifyTelegramPhoto = async (screenshot, current, messageId) => {
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
     { method: "POST", body: form },
   );
-  if (!response.ok || !(await response.json()).ok) {
+  const sent = await response.json();
+  if (!response.ok || !sent.ok || !Number.isInteger(sent.result?.message_id)) {
     throw new Error(`Telegram no pudo enviar la imagen (HTTP ${response.status}).`);
   }
+  return sent.result.message_id;
 };
 
 const deleteTelegramMessage = async (messageId) => {
@@ -413,17 +412,17 @@ for (const target of targets) {
         prev?.entity === current.entity &&
         prev?.gazetteNumber === current.gazetteNumber &&
         prev?.publicationDate === current.publicationDate;
-      const verification =
-        samePublication && prev?.pdfVerification?.status === "verified" &&
-        prev.pdfVerification.photoSent === true && prev.pdfVerification.documentSent === true &&
-        !needsWhatsAppDocument(whatsAppConfig, previousState.lastWhatsAppMessages ?? {}, current)
+      const fetchedVerification = current.link && current.link !== "-"
+        ? await verifyPublicationPdf(current.link, current.entity, {
+            gazetteNumber: current.gazetteNumber,
+            publicationDate: current.publicationDate,
+          })
+        : { status: "unverified", page: null };
+      const verification = fetchedVerification.status === "verified"
+        ? fetchedVerification
+        : samePublication && prev?.pdfVerification?.status === "verified"
           ? prev.pdfVerification
-          : current.link && current.link !== "-"
-            ? await verifyPublicationPdf(current.link, current.entity, {
-                gazetteNumber: current.gazetteNumber,
-                publicationDate: current.publicationDate,
-              })
-            : { status: "unverified", page: null };
+          : fetchedVerification;
       const { screenshot: renderedScreenshot, document: verifiedDocument, ...metadata } = verification;
       screenshot = renderedScreenshot ?? null;
       document = verifiedDocument ?? null;
@@ -545,12 +544,19 @@ const hasDocumentToSend = results.some(({ document, current }) =>
 const previewDirectory = process.env.TITLE_MONITOR_PREVIEW_DIRECTORY;
 if (previewDirectory && process.env.TITLE_MONITOR_DRY_RUN === "true") {
   await mkdir(previewDirectory, { recursive: true });
-  for (const { current, screenshot } of results) {
-    if (!screenshot) continue;
-    const filename = `${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}-pagina-${current.pdfVerification.page}.png`;
-    const imagePath = path.join(previewDirectory, filename);
-    await writeFile(imagePath, screenshot);
-    console.log(`Vista previa de la página resaltada: ${imagePath}`);
+  for (const { current, screenshot, document } of results) {
+    if (screenshot) {
+      const filename = `${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}-pagina-${current.pdfVerification.page}.png`;
+      const imagePath = path.join(previewDirectory, filename);
+      await writeFile(imagePath, screenshot);
+      console.log(`Vista previa de la página resaltada: ${imagePath}`);
+    }
+    if (document) {
+      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
+      const documentPath = path.join(previewDirectory, filename);
+      await writeFile(documentPath, document);
+      console.log(`Vista previa del PDF: ${documentPath}`);
+    }
   }
 }
 const hasErrors = results.some((result) => result.error);
@@ -614,8 +620,7 @@ const blocks = results.map((result) => {
   if (current.isPending) {
     return [
       `👤 <b>${escapeHtml(current.entity || current.target)}</b>`,
-      `📌 <b>Estado:</b> ⏳ <b>Pendiente de ingreso por la universidad</b>`,
-      `📋 <b>Registro:</b> Pendiente de asignación`,
+      `📋 <b>Registro:</b> Pendiente de asignación [⏳ <b>Pendiente</b>]`,
       `🔍 <i>Búsqueda activa por nombre</i>`,
       `📈 <i>El porcentaje y la fecha estarán disponibles al recibir su registro.</i>`,
     ].join("\n");
@@ -623,22 +628,20 @@ const blocks = results.map((result) => {
 
   const lines = [
     `👤 <b>${escapeHtml(current.entity || "Titular")}</b>`,
-    `📌 <b>Estado:</b> ${formatStatusBadge(current.status)}`,
-    `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code>`,
-    `📥 <b>Fecha de ingreso:</b> ${formatValue(current.receivedAt)}`,
-    formatQueue(result.queue, current.status, sharedRate === null),
+    `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code> [${formatStatusBadge(current.status)}]`,
   ];
 
-  if (current.gazetteNumber !== "-") {
-    lines.push(
-      `📰 <b>Gaceta N.º:</b> ${formatValue(current.gazetteNumber)} | 📅 <b>Publicación:</b> ${formatValue(current.publicationDate)}`,
-    );
-  }
-
   if (/^publicado$/i.test(current.status)) {
-    lines.push(current.pdfVerification?.status === "verified"
-      ? `📄 <b>Nombre confirmado en el PDF:</b> página ${current.pdfVerification.page}`
-      : "📄 <b>Página del PDF:</b> pendiente de verificar");
+    const verified = current.pdfVerification?.status === "verified";
+    lines.push(verified
+      ? `📰 <b>Gaceta N.º:</b> ${formatValue(current.gazetteNumber)}, pág. ${current.pdfVerification.page} [🟢 <b>Verificado</b>]`
+      : `📰 <b>Gaceta N.º:</b> ${formatValue(current.gazetteNumber)} [⏳ <b>Página sin verificar</b>]`);
+    lines.push(`📅 <b>Ingreso:</b> ${formatValue(current.receivedAt)} | <b>Publicación:</b> ${formatValue(current.publicationDate)}`);
+  } else {
+    lines.push(
+      `📥 <b>Ingreso:</b> ${formatValue(current.receivedAt)}`,
+      formatQueue(result.queue, sharedRate === null),
+    );
   }
 
   if (isNewlyDiscovered) {
@@ -659,6 +662,8 @@ const footer = hasChanges
     : sentDailyNoChangeReport
       ? "🔔 <i>Sin cambios en los registros durante las comprobaciones de hoy.</i>"
       : "🔔 <i>Sin cambios desde la última comprobación.</i>";
+const hasUnpublished = results.some(({ current }) =>
+  current && !/^publicado$/i.test(current.status));
 
 const dashboardMessage = [
   headerTitle,
@@ -666,11 +671,11 @@ const dashboardMessage = [
   sharedRate === null ? null : `📊 <b>Ritmo común:</b> ≈${sharedRate.toLocaleString("es-NI", { maximumFractionDigits: 1 })} TP por día hábil`,
   "───────────────────────────",
   blocks.join("\n───────────────────────────\n"),
-  "───────────────────────────",
+  results.length > 1 ? "───────────────────────────" : null,
   activeRates.length > 0
     ? "<i>Ventana orientativa según las últimas 2 y 4 semanas activas; se omiten semanas con feriados.</i>"
     : null,
-  footer,
+  hasUnpublished || hasErrors ? footer : null,
 ].filter(Boolean).join("\n");
 
 // Interactive Buttons (Inline Keyboard)
@@ -685,19 +690,18 @@ const inlineKeyboard = [
 
 // Add direct reading button for any published edition
 for (const { current } of results) {
-  if (current?.link && current.link !== "-") {
+  if (current?.pdfVerification?.status === "verified") {
+    inlineKeyboard.push([{
+      text: `📄 Abrir Gaceta N.º ${current.gazetteNumber}, pág. ${current.pdfVerification.page} (${current.entity?.split(" ")[0] ?? "Título"})`,
+      url: current.pdfVerification.url,
+    }]);
+  } else if (current?.link && current.link !== "-") {
     inlineKeyboard.push([
       {
         text: `📖 Leer Gaceta N.º ${current.gazetteNumber || "Oficial"} (${current.entity ? current.entity.split(" ")[0] : "Título"})`,
         url: current.link,
       },
     ]);
-  }
-  if (current?.pdfVerification?.status === "verified") {
-    inlineKeyboard.push([{
-      text: `📄 Abrir página ${current.pdfVerification.page} (${current.entity?.split(" ")[0] ?? "Título"})`,
-      url: current.pdfVerification.url,
-    }]);
   }
 }
 
@@ -712,41 +716,54 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
   if (process.env.TITLE_MONITOR_TELEGRAM_DISABLED !== "true") {
     try {
       const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
+      const previousMessage = lastTelegramMessage;
+      const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
+        .update(String(process.env.TELEGRAM_CHAT_ID))
+        .digest("hex");
+      const sameChat = previousMessage?.chatFingerprint === chatFingerprint;
+      const mediaByRegistry = { ...(sameChat ? previousMessage.mediaByRegistry : {}) };
+      const replacedMediaIds = [];
       for (const { current, screenshot, document } of results) {
-        if (screenshot && !current.pdfVerification.photoSent) {
+        if (!current?.registry || !/^publicado$/i.test(current.status)) continue;
+        const priorMedia = mediaByRegistry[current.registry] ?? {};
+        const nextMedia = { ...priorMedia };
+        if (screenshot) {
           try {
-            await notifyTelegramPhoto(screenshot, current, messageId);
+            const photoId = await notifyTelegramPhoto(screenshot, current, messageId);
+            if (Number.isInteger(priorMedia.photo)) replacedMediaIds.push(priorMedia.photo);
+            nextMedia.photo = photoId;
             current.pdfVerification.photoSent = true;
           } catch (error) {
             console.warn(error.message);
           }
         }
-        if (document && !current.pdfVerification.documentSent) {
+        if (document) {
           try {
-            await notifyTelegramDocument(document, current, messageId);
+            const documentId = await notifyTelegramDocument(document, current, messageId);
+            if (Number.isInteger(priorMedia.document)) replacedMediaIds.push(priorMedia.document);
+            nextMedia.document = documentId;
             current.pdfVerification.documentSent = true;
           } catch (error) {
             console.warn(error.message);
           }
         }
+        mediaByRegistry[current.registry] = nextMedia;
       }
-      const previousMessage = lastTelegramMessage;
-      const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
-        .update(String(process.env.TELEGRAM_CHAT_ID))
-        .digest("hex");
-      lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
+      lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint, mediaByRegistry };
       const previousSentAt = Date.parse(previousMessage?.sentAt);
       if (
         Number.isInteger(previousMessage?.messageId) &&
         previousMessage.messageId !== messageId &&
-        previousMessage.chatFingerprint === chatFingerprint &&
+        sameChat &&
         Number.isFinite(previousSentAt) &&
         now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
       ) {
-        try {
-          await deleteTelegramMessage(previousMessage.messageId);
-        } catch (error) {
-          console.warn(error.message);
+        for (const oldId of [previousMessage.messageId, ...replacedMediaIds]) {
+          try {
+            await deleteTelegramMessage(oldId);
+          } catch (error) {
+            console.warn(error.message);
+          }
         }
       }
     } catch (error) {

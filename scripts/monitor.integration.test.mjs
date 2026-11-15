@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { makePdf } from "./pdf-test-fixture.mjs";
 
 test("genera el mensaje y el JSON con ambos rangos sin llamar a Telegram", async () => {
   const RealDate = Date;
@@ -96,7 +97,9 @@ test("un título publicado no muestra cola ni estimación de otros TP", async ()
   try {
     await import("./check-lagaceta-title.mjs?published-test");
     const output = messages.join("\n");
-    assert.match(output, /Tu título ya fue publicado/);
+    assert.match(output, /Registro:<\/b> <code>2026-TP1000<\/code> \[🟢 <b>Publicado<\/b>\]/);
+    assert.match(output, /Gaceta N\.º:<\/b> 195 \[⏳ <b>Página sin verificar<\/b>\]/);
+    assert.match(output, /Ingreso:<\/b> 11\/08\/2026 \| <b>Publicación:<\/b> 23\/10\/2026/);
     assert.doesNotMatch(output, /TP anteriores pendientes|Avance desde el ingreso|Publicación estimada|Ventana orientativa/);
     const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
     assert.equal(state.estimates["2026-TP1000"], undefined);
@@ -160,6 +163,103 @@ test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async ()
     const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
     assert.equal(state.lastTelegramMessage, null);
     assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    for (const key of keys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  }
+});
+
+test("dos avisos publicados adjuntan imagen y PDF; un fallo conserva los anteriores", async () => {
+  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "title-monitor-media-"));
+  const keys = [
+    "TITLE_MONITOR_TARGETS", "TITLE_MONITOR_STATE_DIRECTORY", "TITLE_MONITOR_DRY_RUN",
+    "TITLE_MONITOR_TELEGRAM_DISABLED", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "WHAPI_TOKEN", "WHAPI_RECIPIENTS", "WHATSAPP_DISABLED", "GITHUB_EVENT_NAME",
+  ];
+  const originalEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    TITLE_MONITOR_TARGETS: "2026-TP1",
+    TITLE_MONITOR_STATE_DIRECTORY: stateDirectory,
+    TITLE_MONITOR_DRY_RUN: "false",
+    TITLE_MONITOR_TELEGRAM_DISABLED: "false",
+    TELEGRAM_BOT_TOKEN: "token-de-prueba",
+    TELEGRAM_CHAT_ID: "12345",
+    WHAPI_TOKEN: "token-de-prueba",
+    WHAPI_RECIPIENTS: "120363426827575325@g.us",
+    WHATSAPP_DISABLED: "false",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+  });
+  const pdfUrl = "https://www.lagaceta.gob.ni/test.pdf";
+  const cells = [
+    "2026-TP1", "11/08/2026", "TP-TITULO PROFESIONALES", "PERSONA DE PRUEBA",
+    "195", `<a href="${pdfUrl}">PDF</a>`, "23/10/2026", "-", "Publicado",
+  ];
+  const row = `<tr class="consulta-row">${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+  const pdf = makePdf("PERSONA DE PRUEBA");
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const calls = [];
+  let telegramId = 100;
+  let whatsappId = 100;
+  let pdfAvailable = true;
+  const messages = [];
+  globalThis.fetch = async (input, options = {}) => {
+    const url = new URL(input);
+    calls.push({ url, options });
+    if (url.hostname === "www.lagaceta.gob.ni") {
+      return url.pathname === "/test.pdf"
+        ? pdfAvailable
+          ? new Response(pdf, { headers: { "content-type": "application/pdf" } })
+          : new Response("No disponible", { status: 503 })
+        : new Response(row);
+    }
+    if (url.hostname === "api.telegram.org") {
+      return new Response(JSON.stringify({ ok: true, result: { message_id: ++telegramId } }));
+    }
+    if (url.hostname === "gate.whapi.cloud") {
+      return options.method === "DELETE"
+        ? new Response('{"success":true}')
+        : new Response(JSON.stringify({ message: { id: `whatsapp-${++whatsappId}` } }));
+    }
+    throw new Error(`Solicitud inesperada: ${url}`);
+  };
+  console.log = (...args) => messages.push(args.join(" "));
+  try {
+    await import("./check-lagaceta-title.mjs?media-first");
+    await import("./check-lagaceta-title.mjs?media-second");
+    const sentTelegram = (method) => calls.filter(({ url }) =>
+      url.hostname === "api.telegram.org" && url.pathname.endsWith(`/${method}`));
+    const sentWhatsApp = (method) => calls.filter(({ url, options }) =>
+      url.hostname === "gate.whapi.cloud" && url.pathname === `/messages/${method}` && options.method === "POST");
+    for (const method of ["sendMessage", "sendPhoto", "sendDocument"]) {
+      assert.equal(sentTelegram(method).length, 2, method);
+    }
+    for (const method of ["text", "interactive", "image", "document"]) {
+      assert.equal(sentWhatsApp(method).length, 2, method);
+    }
+    assert.equal(sentTelegram("deleteMessage").length, 3);
+    assert.equal(calls.filter(({ url, options }) =>
+      url.hostname === "gate.whapi.cloud" && options.method === "DELETE").length, 4);
+    assert.match(messages.join("\n"), /Gaceta N\.º:<\/b> 195, pág\. 1 \[🟢 <b>Verificado<\/b>\]/);
+    assert.doesNotMatch(messages.join("\n"), /TP anteriores pendientes|Avance desde el ingreso/);
+    const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.lastTelegramMessage.mediaByRegistry["2026-TP1"].document, 106);
+    assert.equal(state.records["2026-TP1"].pdfVerification.document, undefined);
+
+    pdfAvailable = false;
+    await import("./check-lagaceta-title.mjs?media-temporary-failure");
+    assert.equal(sentTelegram("sendPhoto").length, 2);
+    assert.equal(sentTelegram("sendDocument").length, 2);
+    assert.equal(sentWhatsApp("image").length, 2);
+    assert.equal(sentWhatsApp("document").length, 2);
+    const retainedState = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(retainedState.records["2026-TP1"].pdfVerification.status, "verified");
+    assert.equal(retainedState.lastTelegramMessage.mediaByRegistry["2026-TP1"].document, 106);
+    assert.match(messages.at(-2), /pág\. 1 \[🟢 <b>Verificado<\/b>\]/);
   } finally {
     globalThis.fetch = originalFetch;
     console.log = originalLog;

@@ -9,7 +9,9 @@ export const notifyTelegramDocument = async (document, current, messageId, env =
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`,
     { method: "POST", body: form },
   );
-  if (!response.ok || !(await response.json()).ok) {
+  const sent = await response.json();
+  if (!response.ok || !sent.ok || !Number.isInteger(sent.result?.message_id)) {
     throw new Error(`Telegram no pudo enviar el PDF (HTTP ${response.status}).`);
   }
+  return sent.result.message_id;
 };

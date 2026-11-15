@@ -11,7 +11,7 @@ test("adjunta el PDF completo a Telegram como respuesta al aviso", async () => {
   };
   try {
     const pdf = Buffer.from("%PDF-1.4\ncontenido de prueba");
-    await notifyTelegramDocument(pdf, {
+    const sentId = await notifyTelegramDocument(pdf, {
       registry: "2026-TP23820", gazetteNumber: "195",
       entity: "NAYELIS DE LOS ANGELES SOTELO RODRIGUEZ",
       pdfVerification: { page: 98 },
@@ -25,6 +25,7 @@ test("adjunta el PDF completo a Telegram como respuesta al aviso", async () => {
     assert.equal(attachment.name, "La-Gaceta-195-2026-TP23820.pdf");
     assert.equal(attachment.type, "application/pdf");
     assert.deepEqual(Buffer.from(await attachment.arrayBuffer()), pdf);
+    assert.equal(sentId, 321);
   } finally {
     globalThis.fetch = originalFetch;
   }

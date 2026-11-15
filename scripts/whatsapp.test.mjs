@@ -91,9 +91,7 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
     );
     assert.deepEqual(calls.filter(({ options }) => options.method === "DELETE").map(({ url }) => url), [
       "https://gate.whapi.cloud/messages/message-1",
-      "https://gate.whapi.cloud/messages/message-2",
       "https://gate.whapi.cloud/messages/message-3",
-      "https://gate.whapi.cloud/messages/message-4",
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -159,13 +157,14 @@ test("conserva los ID cuyo borrado no confirmó Whapi y los reintenta", async ()
   }
 });
 
-test("envía el PDF al grupo una vez y conserva el documento al reemplazar avisos", async () => {
+test("reenvía imagen y PDF con cada aviso y borra los adjuntos anteriores", async () => {
   const calls = [];
+  let serial = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
     if (options.method === "DELETE") return new Response('{"success":true}', { status: 200 });
-    return new Response(JSON.stringify({ message: { id: `message-${calls.length}` } }), { status: 200 });
+    return new Response(JSON.stringify({ message: { id: `message-${++serial}` } }), { status: 200 });
   };
   const config = { token: "token", recipients: ["120363426827575325@g.us"] };
   const current = {
@@ -185,16 +184,24 @@ test("envía el PDF al grupo una vez y conserva el documento al reemplazar aviso
     assert.equal(payload.filename, "La-Gaceta-195-2026-TP23820.pdf");
     assert.match(payload.caption, /NAYELIS.*página 98/);
     assert.equal(needsWhatsAppDocument(config, first, current), false);
-    assert.deepEqual(Object.values(first)[0].ids, ["message-1", "message-2"]);
+    assert.deepEqual(Object.values(first)[0].ids, ["message-1", "message-2", "message-3"]);
 
     calls.length = 0;
     const second = await notifyWhatsApp(config, "Segundo aviso", [{
-      current, document: Buffer.from("%PDF-test"),
+      current, document: Buffer.from("%PDF-test"), screenshot: Buffer.from([1, 2, 3]),
     }], first);
-    assert.equal(calls.some(({ url }) => url.endsWith("/document")), false);
+    assert.deepEqual(calls.filter(({ options }) => options.method === "POST")
+      .map(({ url }) => url.split("/").at(-1)), ["text", "image", "document"]);
     assert.deepEqual(calls.filter(({ options }) => options.method === "DELETE")
-      .map(({ url }) => url.split("/").at(-1)), ["message-1", "message-2"]);
+      .map(({ url }) => url.split("/").at(-1)), ["message-1", "message-2", "message-3"]);
     assert.equal(needsWhatsAppDocument(config, second, current), false);
+    assert.deepEqual(Object.values(second)[0].ids, ["message-4", "message-5", "message-6"]);
+
+    calls.length = 0;
+    const third = await notifyWhatsApp(config, "Tercer aviso", [], second);
+    assert.deepEqual(calls.filter(({ options }) => options.method === "DELETE")
+      .map(({ url }) => url.split("/").at(-1)), ["message-4"]);
+    assert.deepEqual(Object.values(third)[0].ids, ["message-7", "message-5", "message-6"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

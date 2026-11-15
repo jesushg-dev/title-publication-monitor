@@ -116,43 +116,60 @@ export const notifyWhatsApp = async (config, message, media = [], previous = {},
         console.warn(`Whapi no pudo mostrar los botones; el enlace de respaldo sigue en el aviso: ${error.message}`);
       }
     }
+    const previousImageIds = previous[fingerprint]?.imageMessageIds ?? {};
+    const imageMessageIds = { ...previousImageIds };
     for (const { screenshot, current } of media) {
       if (!screenshot) continue;
-      ids.push(await post("image", config.token, {
+      const id = await post("image", config.token, {
         to: recipient,
         media: `data:image/png;name=pagina-resaltada.png;base64,${Buffer.from(screenshot).toString("base64")}`,
         caption: `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`,
-      }));
+      });
+      ids.push(id);
+      imageMessageIds[publicationDocumentKey(current)] = id;
     }
     const documentKeys = [...(previous[fingerprint]?.documentKeys ?? [])];
+    const previousDocumentIds = previous[fingerprint]?.documentMessageIds ?? {};
+    const documentMessageIds = { ...previousDocumentIds };
     for (const { document, current } of media) {
       if (!document) continue;
       const key = publicationDocumentKey(current);
-      if (documentKeys.includes(key)) continue;
       const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
-      await post("document", config.token, {
+      const id = await post("document", config.token, {
         to: recipient,
         media: `data:application/pdf;name=${filename};base64,${Buffer.from(document).toString("base64")}`,
         filename,
         caption: `📄 La Gaceta N.º ${current.gazetteNumber} — ${current.entity}. Nombre en la página ${current.pdfVerification.page}.`,
       });
-      documentKeys.push(key);
+      ids.push(id);
+      documentMessageIds[key] = id;
+      if (!documentKeys.includes(key)) documentKeys.push(key);
     }
     const pendingDeleteIds = [];
     const previousIds = [
       ...(previous[fingerprint]?.pendingDeleteIds ?? []),
       ...(previous[fingerprint]?.ids ?? []),
     ];
+    const retainedImageIds = Object.entries(previousImageIds)
+      .filter(([key, id]) => imageMessageIds[key] === id)
+      .map(([, id]) => id);
+    const retainedDocumentIds = Object.entries(previousDocumentIds)
+      .filter(([key, id]) => documentMessageIds[key] === id)
+      .map(([, id]) => id);
+    const retainedMediaIds = new Set([...retainedImageIds, ...retainedDocumentIds]);
+    let deletedCount = 0;
     for (const id of new Set(previousIds)) {
+      if (retainedMediaIds.has(id)) continue;
       try {
         await deleteMessage(config.token, id);
+        deletedCount++;
       } catch (error) {
         pendingDeleteIds.push(id);
         console.warn(`No se pudo borrar el aviso anterior de WhatsApp: ${error.message}`);
       }
     }
-    console.log(`WhatsApp: Whapi confirmó ${previousIds.length - pendingDeleteIds.length} borrado(s); ${pendingDeleteIds.length} pendiente(s) de reintento.`);
-    sent[fingerprint] = { ids, pendingDeleteIds, documentKeys, sentAt: new Date().toISOString() };
+    console.log(`WhatsApp: Whapi confirmó ${deletedCount} borrado(s); ${pendingDeleteIds.length} pendiente(s) de reintento.`);
+    sent[fingerprint] = { ids: [...ids, ...retainedMediaIds], pendingDeleteIds, documentKeys, imageMessageIds, documentMessageIds, sentAt: new Date().toISOString() };
   }
   return sent;
 };
