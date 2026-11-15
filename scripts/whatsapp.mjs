@@ -22,8 +22,8 @@ export const needsWhatsAppDocument = (config, previous, current) =>
     return !(previous[fingerprint]?.documentKeys ?? []).includes(publicationDocumentKey(current));
   }));
 
-export const formatWhatsAppMessage = (html, links = []) => {
-  const message = html
+export const formatWhatsAppMessage = (html) =>
+  html
     .replace(/<b>(.*?)<\/b>/gs, "*$1*")
     .replace(/<i>(.*?)<\/i>/gs, "_$1_")
     .replace(/<code>(.*?)<\/code>/gs, "`$1`")
@@ -32,12 +32,14 @@ export const formatWhatsAppMessage = (html, links = []) => {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
+
+const fallbackUrl = (links) => {
   const references = links.flat().filter(({ url }) => /^https:\/\//.test(url));
   const pages = references.filter(({ url }) => /#page=\d+$/.test(url));
   const fallback = pages.length === 1
     ? pages[0]
     : references.find(({ url }) => new URL(url).pathname === "/consultas") ?? references[0];
-  return fallback ? `${message}\n\n🔗 Fuente oficial: ${fallback.url}` : message;
+  return fallback?.url ?? null;
 };
 
 export const getWhatsAppButtons = (links = []) => {
@@ -96,26 +98,39 @@ const deleteMessage = async (token, id) => {
   if (result.success !== true) throw new Error("Whapi no confirmó el borrado del mensaje anterior.");
 };
 
-export const notifyWhatsApp = async (config, message, media = [], previous = {}, links = []) => {
+export const notifyWhatsApp = async (config, message, media = [], previous = {}, links = [], carouselCards = null) => {
   const sent = { ...previous };
   const buttons = getWhatsAppButtons(links);
   for (const recipient of config.recipients) {
     const fingerprint = createHmac("sha256", config.token).update(recipient).digest("hex");
-    const ids = [await post("text", config.token, {
-      to: recipient, body: message, no_link_preview: true,
-    })];
-    if (buttons.length > 0) {
+    let noticeId;
+    if (carouselCards) {
+      noticeId = await post("carousel", config.token, {
+        to: recipient,
+        body: { text: "🎓 Monitor de títulos — La Gaceta. Desliza para consultar cada trámite." },
+        cards: carouselCards,
+      });
+    } else if (buttons.length > 0) {
       try {
-        ids.push(await post("interactive", config.token, {
+        noticeId = await post("interactive", config.token, {
           to: recipient,
           type: "button",
-          body: { text: "🔗 Accesos oficiales" },
+          body: { text: message },
           action: { buttons },
-        }));
+        });
       } catch (error) {
-        console.warn(`Whapi no pudo mostrar los botones; el enlace de respaldo sigue en el aviso: ${error.message}`);
+        console.warn(`Whapi no pudo mostrar los botones; se enviará el aviso como texto: ${error.message}`);
       }
     }
+    if (!noticeId) {
+      const url = buttons.length > 0 ? fallbackUrl(links) : null;
+      noticeId = await post("text", config.token, {
+        to: recipient,
+        body: url ? `${message}\n\n🔗 ${url}` : message,
+        no_link_preview: true,
+      });
+    }
+    const ids = [noticeId];
     const previousImageIds = previous[fingerprint]?.imageMessageIds ?? {};
     const imageMessageIds = { ...previousImageIds };
     for (const { screenshot, current } of media) {
@@ -123,7 +138,7 @@ export const notifyWhatsApp = async (config, message, media = [], previous = {},
       const id = await post("image", config.token, {
         to: recipient,
         media: `data:image/png;name=pagina-resaltada.png;base64,${Buffer.from(screenshot).toString("base64")}`,
-        caption: `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`,
+        caption: `Captura de la página ${current.pdfVerification.page} con el registro de ${current.entity}`,
       });
       ids.push(id);
       imageMessageIds[publicationDocumentKey(current)] = id;

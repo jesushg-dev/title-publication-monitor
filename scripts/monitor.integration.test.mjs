@@ -151,18 +151,17 @@ test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async ()
     await import("./check-lagaceta-title.mjs?contact-test");
     assert.equal(calls.filter(({ url }) => url.hostname === "api.telegram.org").length, 0);
     const sent = calls.filter(({ url }) => url.hostname === "gate.whapi.cloud");
-    assert.equal(sent.length, 2);
-    assert.equal(sent[0].url.pathname, "/messages/text");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url.pathname, "/messages/interactive");
     const payload = JSON.parse(sent[0].options.body);
     assert.equal(payload.to, "50586793204@s.whatsapp.net");
-    assert.match(payload.body, /2026-TP1/);
-    assert.match(payload.body, /Primera consulta/);
-    assert.equal(payload.no_link_preview, true);
-    assert.equal(sent[1].url.pathname, "/messages/interactive");
-    assert.equal(JSON.parse(sent[1].options.body).action.buttons.length, 1);
+    assert.match(payload.body.text, /2026-TP1/);
+    assert.match(payload.body.text, /Primera consulta/);
+    assert.doesNotMatch(payload.body.text, /Fuente oficial|https:\/\//);
+    assert.equal(payload.action.buttons.length, 1);
     const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
     assert.equal(state.lastTelegramMessage, null);
-    assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids.length, 2);
+    assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     console.log = originalLog;
@@ -238,12 +237,21 @@ test("dos avisos publicados adjuntan imagen y PDF; un fallo conserva los anterio
     for (const method of ["sendMessage", "sendPhoto", "sendDocument"]) {
       assert.equal(sentTelegram(method).length, 2, method);
     }
-    for (const method of ["text", "interactive", "image", "document"]) {
+    for (const method of ["interactive", "image", "document"]) {
       assert.equal(sentWhatsApp(method).length, 2, method);
     }
+    assert.equal(sentWhatsApp("text").length, 0);
     assert.equal(sentTelegram("deleteMessage").length, 3);
     assert.equal(calls.filter(({ url, options }) =>
-      url.hostname === "gate.whapi.cloud" && options.method === "DELETE").length, 4);
+      url.hostname === "gate.whapi.cloud" && options.method === "DELETE").length, 3);
+    const interactive = JSON.parse(sentWhatsApp("interactive")[0].options.body);
+    assert.match(interactive.body.text, /Gaceta N\.º:\* 195, pág\. 1/);
+    assert.doesNotMatch(interactive.body.text, /Fuente oficial|https:\/\//);
+    assert.equal(interactive.action.buttons.length, 2);
+    assert.equal(sentTelegram("sendPhoto")[0].options.body.get("caption"),
+      "Captura de la página 1 con el registro de PERSONA DE PRUEBA");
+    assert.equal(JSON.parse(sentWhatsApp("image")[0].options.body).caption,
+      "Captura de la página 1 con el registro de PERSONA DE PRUEBA");
     assert.match(messages.join("\n"), /Gaceta N\.º:<\/b> 195, pág\. 1 \[🟢 <b>Verificado<\/b>\]/);
     assert.doesNotMatch(messages.join("\n"), /TP anteriores pendientes|Avance desde el ingreso/);
     const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));

@@ -4,6 +4,7 @@ import path from "node:path";
 import { calculateQueue, isEligiblePendingStatus } from "./forecast.mjs";
 import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
+import { buildWhatsAppCarouselCards } from "./whatsapp-carousel.mjs";
 import { notifyTelegramDocument } from "./telegram.mjs";
 
 const defaultRegistries = [
@@ -352,7 +353,7 @@ const notifyTelegram = async (message, inlineKeyboard = []) => {
 const notifyTelegramPhoto = async (screenshot, current, messageId) => {
   const form = new FormData();
   form.append("chat_id", process.env.TELEGRAM_CHAT_ID);
-  form.append("caption", `📄 ${current.entity} — página ${current.pdfVerification.page} de La Gaceta. Nombre resaltado en la imagen.`);
+  form.append("caption", `Captura de la página ${current.pdfVerification.page} con el registro de ${current.entity}`);
   form.append("reply_parameters", JSON.stringify({ message_id: messageId }));
   form.append("photo", new Blob([screenshot], { type: "image/png" }), "pagina-resaltada.png");
   const response = await fetch(
@@ -775,10 +776,13 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
     try {
       lastWhatsAppMessages = await notifyWhatsApp(
         whatsAppConfig,
-        formatWhatsAppMessage(dashboardMessage, inlineKeyboard),
+        formatWhatsAppMessage(dashboardMessage),
         results.filter(({ screenshot, document }) => Boolean(screenshot || document)),
         lastWhatsAppMessages,
         inlineKeyboard,
+        process.env.TITLE_MONITOR_WHATSAPP_CAROUSEL === "true"
+          ? buildWhatsAppCarouselCards(results)
+          : null,
       );
     } catch (error) {
       notificationErrors.push(error);
