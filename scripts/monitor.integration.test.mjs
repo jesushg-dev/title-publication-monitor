@@ -139,7 +139,7 @@ test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async ()
     calls.push({ url, options });
     if (url.hostname === "api.telegram.org") throw new Error("Telegram no debe recibir la prueba");
     if (url.hostname === "gate.whapi.cloud") {
-      return new Response('{"message":{"id":"contact-test-1"}}', { status: 200 });
+      return new Response(JSON.stringify({ message: { id: `contact-test-${calls.length}` } }), { status: 200 });
     }
     return new Response(row, { status: 200 });
   };
@@ -148,14 +148,18 @@ test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async ()
     await import("./check-lagaceta-title.mjs?contact-test");
     assert.equal(calls.filter(({ url }) => url.hostname === "api.telegram.org").length, 0);
     const sent = calls.filter(({ url }) => url.hostname === "gate.whapi.cloud");
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 2);
     assert.equal(sent[0].url.pathname, "/messages/text");
     const payload = JSON.parse(sent[0].options.body);
     assert.equal(payload.to, "50586793204@s.whatsapp.net");
     assert.match(payload.body, /2026-TP1/);
+    assert.match(payload.body, /Primera consulta/);
+    assert.equal(payload.no_link_preview, true);
+    assert.equal(sent[1].url.pathname, "/messages/interactive");
+    assert.equal(JSON.parse(sent[1].options.body).action.buttons.length, 1);
     const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
     assert.equal(state.lastTelegramMessage, null);
-    assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids[0], "contact-test-1");
+    assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
     console.log = originalLog;

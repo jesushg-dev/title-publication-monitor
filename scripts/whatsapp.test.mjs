@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
+import { formatWhatsAppMessage, getWhatsAppButtons, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
 
 test("WhatsApp se habilita solo con token, destinatarios y sin flag", () => {
   const configured = {
@@ -16,7 +16,7 @@ test("WhatsApp se habilita solo con token, destinatarios y sin flag", () => {
   assert.equal(getWhatsAppConfig({ WHAPI_TOKEN: configured.WHAPI_TOKEN }), null);
 });
 
-test("adapta el mensaje de Telegram y añade enlaces para WhatsApp", () => {
+test("adapta el mensaje de Telegram y conserva un enlace de respaldo para WhatsApp", () => {
   const message = formatWhatsAppMessage(
     "👤 <b>JESUS &amp; LUIS</b>\n📋 <code>2026-TP30799</code>\n<i>Sin cambios</i>",
     [[{ text: "Consultar", url: "https://www.lagaceta.gob.ni/consultas" }]],
@@ -24,8 +24,27 @@ test("adapta el mensaje de Telegram y añade enlaces para WhatsApp", () => {
   assert.match(message, /\*JESUS & LUIS\*/);
   assert.match(message, /`2026-TP30799`/);
   assert.match(message, /_Sin cambios_/);
-  assert.match(message, /Consultar: https:\/\/www\.lagaceta\.gob\.ni\/consultas/);
+  assert.match(message, /Fuente oficial: https:\/\/www\.lagaceta\.gob\.ni\/consultas/);
   assert.doesNotMatch(message, /<b>|<code>/);
+});
+
+test("prioriza hasta tres botones oficiales y deja un enlace directo a la página", () => {
+  const links = [
+    [{ text: "🔍 Consultar en La Gaceta", url: "https://www.lagaceta.gob.ni/consultas" }],
+    [{ text: "📖 Leer Gaceta N.º 195 (NAYELIS)", url: "https://www.lagaceta.gob.ni/ediciones?search=23%2F10%2F2026" }],
+    [{ text: "📄 Abrir página 98 (NAYELIS)", url: "https://www.lagaceta.gob.ni/la-gaceta-no-195/#page=98" }],
+    [{ text: "Externo", url: "https://example.com/" }],
+  ];
+  const buttons = getWhatsAppButtons(links);
+  assert.equal(buttons.length, 3);
+  assert.deepEqual(buttons.map(({ title }) => title), [
+    "Consultar La Gaceta", "Página 98 NAYELIS", "Gaceta 195 NAYELIS",
+  ]);
+  assert.ok(buttons.every(({ type, title, url }) =>
+    type === "url" && title.length <= 25 && url.startsWith("https://www.lagaceta.gob.ni/")));
+  const message = formatWhatsAppMessage("<b>Publicado</b>", links);
+  assert.match(message, /Fuente oficial: https:\/\/www\.lagaceta\.gob\.ni\/la-gaceta-no-195\/#page=98/);
+  assert.doesNotMatch(message, /example\.com|ediciones\?/);
 });
 
 test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
@@ -54,8 +73,8 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
     ]);
     assert.ok(calls.every(({ options }) => options.headers.Authorization === "Bearer token-de-prueba"));
     assert.deepEqual(calls.filter(({ url }) => url.endsWith("/text")).map(({ options }) => JSON.parse(options.body)), [
-      { to: "50588888888", body: "*Aviso*" },
-      { to: "50577777777", body: "*Aviso*" },
+      { to: "50588888888", body: "*Aviso*", no_link_preview: true },
+      { to: "50577777777", body: "*Aviso*", no_link_preview: true },
     ]);
     const image = JSON.parse(calls[1].options.body);
     assert.match(image.media, /^data:image\/png;name=pagina-resaltada\.png;base64,AQID$/);
@@ -78,6 +97,39 @@ test("envía texto e imagen a cada destinatario mediante Whapi", async () => {
     ]);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("si Whapi rechaza los botones, conserva el aviso con enlace sin vista previa", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const calls = [];
+  const warnings = [];
+  console.warn = (message) => warnings.push(message);
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/interactive")) return new Response("rechazado", { status: 400 });
+    return new Response('{"message":{"id":"text-1"}}', { status: 200 });
+  };
+  try {
+    const links = [[{ text: "Consultar", url: "https://www.lagaceta.gob.ni/consultas" }]];
+    const message = formatWhatsAppMessage("<b>Estado consultado</b>", links);
+    const sent = await notifyWhatsApp(
+      { token: "token", recipients: ["50586793204@s.whatsapp.net"] },
+      message, [], {}, links,
+    );
+    assert.deepEqual(calls.map(({ url }) => url.split("/").at(-1)), ["text", "interactive"]);
+    const textPayload = JSON.parse(calls[0].options.body);
+    assert.equal(textPayload.no_link_preview, true);
+    assert.match(textPayload.body, /Fuente oficial: https:\/\/www\.lagaceta\.gob\.ni\/consultas/);
+    const buttonPayload = JSON.parse(calls[1].options.body);
+    assert.equal(buttonPayload.type, "button");
+    assert.deepEqual(buttonPayload.action.buttons.map(({ type }) => type), ["url"]);
+    assert.deepEqual(Object.values(sent)[0].ids, ["text-1"]);
+    assert.match(warnings[0], /enlace de respaldo/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 

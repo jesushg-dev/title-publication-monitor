@@ -32,10 +32,41 @@ export const formatWhatsAppMessage = (html, links = []) => {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, "&");
-  const references = links.flat()
-    .filter(({ url }) => /^https:\/\//.test(url))
-    .map(({ text, url }) => `${text}: ${url}`);
-  return references.length ? `${message}\n\n${references.join("\n")}` : message;
+  const references = links.flat().filter(({ url }) => /^https:\/\//.test(url));
+  const pages = references.filter(({ url }) => /#page=\d+$/.test(url));
+  const fallback = pages.length === 1
+    ? pages[0]
+    : references.find(({ url }) => new URL(url).pathname === "/consultas") ?? references[0];
+  return fallback ? `${message}\n\n🔗 Fuente oficial: ${fallback.url}` : message;
+};
+
+export const getWhatsAppButtons = (links = []) => {
+  const references = links.flat().filter(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "https:" && parsed.hostname === "www.lagaceta.gob.ni";
+    } catch {
+      return false;
+    }
+  });
+  const consultation = references.filter(({ url }) => new URL(url).pathname === "/consultas");
+  const pages = references.filter(({ url }) => /#page=\d+$/.test(url));
+  const editions = references.filter(({ url }) =>
+    new URL(url).pathname !== "/consultas" && !/#page=\d+$/.test(url));
+  const selected = [...consultation, ...pages, ...editions]
+    .filter(({ url }, index, entries) => entries.findIndex((entry) => entry.url === url) === index)
+    .slice(0, 3);
+  return selected.map(({ text, url }, index) => {
+    const firstName = /\(([^)]+)\)/.exec(text)?.[1] ?? "";
+    const page = /#page=(\d+)$/.exec(url)?.[1];
+    const gazette = /Gaceta N\.º\s*(\d+)/i.exec(text)?.[1];
+    const title = page
+      ? `Página ${page} ${firstName}`
+      : gazette
+        ? `Gaceta ${gazette} ${firstName}`
+        : "Consultar La Gaceta";
+    return { type: "url", title: title.trim().slice(0, 25), id: `gaceta-link-${index + 1}`, url };
+  });
 };
 
 const post = async (endpoint, token, body) => {
@@ -65,11 +96,26 @@ const deleteMessage = async (token, id) => {
   if (result.success !== true) throw new Error("Whapi no confirmó el borrado del mensaje anterior.");
 };
 
-export const notifyWhatsApp = async (config, message, media = [], previous = {}) => {
+export const notifyWhatsApp = async (config, message, media = [], previous = {}, links = []) => {
   const sent = { ...previous };
+  const buttons = getWhatsAppButtons(links);
   for (const recipient of config.recipients) {
     const fingerprint = createHmac("sha256", config.token).update(recipient).digest("hex");
-    const ids = [await post("text", config.token, { to: recipient, body: message })];
+    const ids = [await post("text", config.token, {
+      to: recipient, body: message, no_link_preview: true,
+    })];
+    if (buttons.length > 0) {
+      try {
+        ids.push(await post("interactive", config.token, {
+          to: recipient,
+          type: "button",
+          body: { text: "🔗 Accesos oficiales" },
+          action: { buttons },
+        }));
+      } catch (error) {
+        console.warn(`Whapi no pudo mostrar los botones; el enlace de respaldo sigue en el aviso: ${error.message}`);
+      }
+    }
     for (const { screenshot, current } of media) {
       if (!screenshot) continue;
       ids.push(await post("image", config.token, {

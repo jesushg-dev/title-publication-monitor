@@ -654,6 +654,8 @@ const footer = hasChanges
   ? "Te avisaremos cuando haya otra actualización."
   : hasErrors
     ? "⚠️ <i>Al menos un registro no se pudo confirmar.</i>"
+    : results.every(({ prev }) => !prev)
+      ? "✅ <i>Primera consulta: estado verificado.</i>"
     : sentDailyNoChangeReport
       ? "🔔 <i>Sin cambios en los registros durante las comprobaciones de hoy.</i>"
       : "🔔 <i>Sin cambios desde la última comprobación.</i>";
@@ -759,6 +761,7 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
         formatWhatsAppMessage(dashboardMessage, inlineKeyboard),
         results.filter(({ screenshot, document }) => Boolean(screenshot || document)),
         lastWhatsAppMessages,
+        inlineKeyboard,
       );
     } catch (error) {
       notificationErrors.push(error);
