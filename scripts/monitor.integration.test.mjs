@@ -108,3 +108,60 @@ test("un título publicado no muestra cola ni estimación de otros TP", async ()
     delete process.env.TITLE_MONITOR_DRY_RUN;
   }
 });
+
+test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async () => {
+  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "title-monitor-contact-"));
+  const keys = [
+    "TITLE_MONITOR_TARGETS", "TITLE_MONITOR_STATE_DIRECTORY", "TITLE_MONITOR_DRY_RUN",
+    "TITLE_MONITOR_TELEGRAM_DISABLED", "WHAPI_TOKEN", "WHAPI_RECIPIENTS", "WHATSAPP_DISABLED",
+    "GITHUB_EVENT_NAME",
+  ];
+  const originalEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    TITLE_MONITOR_TARGETS: "2026-TP1",
+    TITLE_MONITOR_STATE_DIRECTORY: stateDirectory,
+    TITLE_MONITOR_DRY_RUN: "false",
+    TITLE_MONITOR_TELEGRAM_DISABLED: "true",
+    WHAPI_TOKEN: "token-de-prueba",
+    WHAPI_RECIPIENTS: "50586793204@s.whatsapp.net",
+    WHATSAPP_DISABLED: "false",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+  });
+  const row = `<tr class="consulta-row">${[
+    "2026-TP1", "15/10/2026", "TP-TITULO PROFESIONALES", "PERSONA DE PRUEBA",
+    "-", "-", "-", "-", "Redactado",
+  ].map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const calls = [];
+  globalThis.fetch = async (input, options = {}) => {
+    const url = new URL(input);
+    calls.push({ url, options });
+    if (url.hostname === "api.telegram.org") throw new Error("Telegram no debe recibir la prueba");
+    if (url.hostname === "gate.whapi.cloud") {
+      return new Response('{"message":{"id":"contact-test-1"}}', { status: 200 });
+    }
+    return new Response(row, { status: 200 });
+  };
+  console.log = () => {};
+  try {
+    await import("./check-lagaceta-title.mjs?contact-test");
+    assert.equal(calls.filter(({ url }) => url.hostname === "api.telegram.org").length, 0);
+    const sent = calls.filter(({ url }) => url.hostname === "gate.whapi.cloud");
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url.pathname, "/messages/text");
+    const payload = JSON.parse(sent[0].options.body);
+    assert.equal(payload.to, "50586793204@s.whatsapp.net");
+    assert.match(payload.body, /2026-TP1/);
+    const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.lastTelegramMessage, null);
+    assert.equal(Object.values(state.lastWhatsAppMessages)[0].ids[0], "contact-test-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    for (const key of keys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  }
+});

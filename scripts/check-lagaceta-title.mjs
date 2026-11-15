@@ -704,47 +704,52 @@ let lastTelegramMessage = previousState.lastTelegramMessage ?? null;
 let lastWhatsAppMessages = previousState.lastWhatsAppMessages ?? {};
 const notificationErrors = [];
 if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
-  try {
-    const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
-    for (const { current, screenshot, document } of results) {
-      if (screenshot && !current.pdfVerification.photoSent) {
+  if (process.env.TITLE_MONITOR_TELEGRAM_DISABLED === "true" && !whatsAppConfig) {
+    throw new Error("Telegram está desactivado y WhatsApp no tiene token o destinatarios configurados.");
+  }
+  if (process.env.TITLE_MONITOR_TELEGRAM_DISABLED !== "true") {
+    try {
+      const messageId = await notifyTelegram(dashboardMessage, inlineKeyboard);
+      for (const { current, screenshot, document } of results) {
+        if (screenshot && !current.pdfVerification.photoSent) {
+          try {
+            await notifyTelegramPhoto(screenshot, current, messageId);
+            current.pdfVerification.photoSent = true;
+          } catch (error) {
+            console.warn(error.message);
+          }
+        }
+        if (document && !current.pdfVerification.documentSent) {
+          try {
+            await notifyTelegramDocument(document, current, messageId);
+            current.pdfVerification.documentSent = true;
+          } catch (error) {
+            console.warn(error.message);
+          }
+        }
+      }
+      const previousMessage = lastTelegramMessage;
+      const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
+        .update(String(process.env.TELEGRAM_CHAT_ID))
+        .digest("hex");
+      lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
+      const previousSentAt = Date.parse(previousMessage?.sentAt);
+      if (
+        Number.isInteger(previousMessage?.messageId) &&
+        previousMessage.messageId !== messageId &&
+        previousMessage.chatFingerprint === chatFingerprint &&
+        Number.isFinite(previousSentAt) &&
+        now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
+      ) {
         try {
-          await notifyTelegramPhoto(screenshot, current, messageId);
-          current.pdfVerification.photoSent = true;
+          await deleteTelegramMessage(previousMessage.messageId);
         } catch (error) {
           console.warn(error.message);
         }
       }
-      if (document && !current.pdfVerification.documentSent) {
-        try {
-          await notifyTelegramDocument(document, current, messageId);
-          current.pdfVerification.documentSent = true;
-        } catch (error) {
-          console.warn(error.message);
-        }
-      }
+    } catch (error) {
+      notificationErrors.push(error);
     }
-    const previousMessage = lastTelegramMessage;
-    const chatFingerprint = createHmac("sha256", process.env.TELEGRAM_BOT_TOKEN)
-      .update(String(process.env.TELEGRAM_CHAT_ID))
-      .digest("hex");
-    lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint };
-    const previousSentAt = Date.parse(previousMessage?.sentAt);
-    if (
-      Number.isInteger(previousMessage?.messageId) &&
-      previousMessage.messageId !== messageId &&
-      previousMessage.chatFingerprint === chatFingerprint &&
-      Number.isFinite(previousSentAt) &&
-      now.getTime() - previousSentAt < 48 * 60 * 60 * 1000
-    ) {
-      try {
-        await deleteTelegramMessage(previousMessage.messageId);
-      } catch (error) {
-        console.warn(error.message);
-      }
-    }
-  } catch (error) {
-    notificationErrors.push(error);
   }
 
   if (whatsAppConfig) {

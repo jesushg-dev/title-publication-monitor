@@ -62,6 +62,24 @@ dir preview
 
 El PNG se guarda como `preview\2026-TP23820-pagina-N.png` cuando La Gaceta indica «Publicado», ofrece un PDF y el nombre completo se encuentra en una página única. El comando muestra el estado y la página del PDF aunque no se pueda generar la imagen. La carpeta de estado separada evita modificar la caché usada por el monitor.
 
+Para enviar una prueba real **solo a un contacto de WhatsApp** desde Git Bash, usa una carpeta de estado separada. El ejemplo consulta el título publicado `2026-TP23820`, por lo que también intentará enviar la imagen resaltada y el PDF si se verifican:
+
+```bash
+read -rsp 'Token de Whapi: ' WHAPI_TOKEN
+printf '\n'
+WHAPI_TOKEN="$WHAPI_TOKEN" \
+WHAPI_RECIPIENTS='50586793204@s.whatsapp.net' \
+WHATSAPP_DISABLED=false \
+TITLE_MONITOR_TELEGRAM_DISABLED=true \
+TITLE_MONITOR_TARGETS=2026-TP23820 \
+TITLE_MONITOR_STATE_DIRECTORY=.title-monitor-contact-test-state \
+TITLE_MONITOR_DRY_RUN=false \
+node scripts/check-lagaceta-title.mjs
+unset WHAPI_TOKEN
+```
+
+Para probar el tablero de los tres títulos configurados, omite la variable `TITLE_MONITOR_TARGETS` en ese comando. La variable `TITLE_MONITOR_TELEGRAM_DISABLED=true` solo omite Telegram en esa ejecución; el workflow normal no la establece.
+
 Para probar únicamente el cálculo sin consultar La Gaceta ni Telegram:
 
 ```bash
