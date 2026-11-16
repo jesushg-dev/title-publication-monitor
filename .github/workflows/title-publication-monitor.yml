@@ -51,6 +51,7 @@ jobs:
           WHAPI_TOKEN: ${{ secrets.WHAPI_TOKEN }}
           WHAPI_RECIPIENTS: ${{ secrets.WHAPI_RECIPIENTS }}
           WHATSAPP_DISABLED: ${{ vars.WHATSAPP_DISABLED }}
+          TITLE_MONITOR_WHATSAPP_CAROUSEL: "true"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
 
