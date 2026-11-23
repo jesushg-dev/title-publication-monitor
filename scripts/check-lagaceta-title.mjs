@@ -9,7 +9,6 @@ import { notifyTelegramDocument } from "./telegram.mjs";
 
 const defaultRegistries = [
   "2026-TP30799",
-  "2026-TP29824",
   "DANILO JOSE ACEVEDO FLORES",
 ];
 
