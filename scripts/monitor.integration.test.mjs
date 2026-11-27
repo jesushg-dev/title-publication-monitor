@@ -172,6 +172,53 @@ test("envía una prueba al contacto de WhatsApp sin llamar a Telegram", async ()
   }
 });
 
+test("encuentra el título en el PDF actual aunque consultas no esté marcado como Publicado", async () => {
+  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "title-monitor-current-pdf-"));
+  process.env.TITLE_MONITOR_TARGETS = "2026-TP30799";
+  process.env.TITLE_MONITOR_STATE_DIRECTORY = stateDirectory;
+  process.env.TITLE_MONITOR_DRY_RUN = "true";
+  const pdf = makePdf("JESUS ENMANUEL HERNANDEZ GONZALEZ");
+  const row = `<tr class="consulta-row">${[
+    "2026-TP30799", "15/10/2026", "TP-TITULO PROFESIONALES",
+    "JESUS ENMANUEL HERNANDEZ GONZALEZ", "-", "-", "-", "-", "En publicación",
+  ].map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const messages = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.pathname === "/ediciones") {
+      return new Response('<a href="/la-gaceta-no-219-viernes-27-de-noviembre-de-2026/">Actual</a>', {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    if (url.pathname === "/la-gaceta-no-219-viernes-27-de-noviembre-de-2026/") {
+      return new Response(`<h1>La Gaceta - No. 219 Viernes 27 de Noviembre de 2026</h1><script>const pdfData = atob('${pdf.toString("base64")}');</script>`, {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    return new Response(row, { status: 200 });
+  };
+  console.log = (...args) => messages.push(args.join(" "));
+  try {
+    await import("./check-lagaceta-title.mjs?current-pdf-test");
+    const output = messages.join("\n");
+    assert.match(output, /Gaceta N\.º:<\/b> 219, pág\. 1 \[🟢 <b>Verificado<\/b>\]/);
+    assert.match(output, /Publicación:<\/b> 27\/11\/2026/);
+    assert.doesNotMatch(output, /TP anteriores pendientes|Publicación estimada/);
+    const state = JSON.parse(await readFile(path.join(stateDirectory, "state.json"), "utf8"));
+    assert.equal(state.records["2026-TP30799"].gazetteNumber, "219");
+    assert.equal(state.records["2026-TP30799"].pdfVerification.status, "verified");
+    assert.equal(state.records["2026-TP30799"].pdfVerification.page, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    delete process.env.TITLE_MONITOR_TARGETS;
+    delete process.env.TITLE_MONITOR_STATE_DIRECTORY;
+    delete process.env.TITLE_MONITOR_DRY_RUN;
+  }
+});
+
 test("dos avisos publicados adjuntan imagen y PDF; un fallo conserva los anteriores", async () => {
   const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "title-monitor-media-"));
   const keys = [

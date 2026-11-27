@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import path from "node:path";
 import { calculateQueue, isEligiblePendingStatus } from "./forecast.mjs";
-import { verifyPublicationPdf } from "./verify-publication-pdf.mjs";
+import { openLatestEditionPdf, verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 import { formatWhatsAppMessage, getWhatsAppConfig, needsWhatsAppDocument, notifyWhatsApp } from "./whatsapp.mjs";
 import { buildWhatsAppCarouselCards } from "./whatsapp-carousel.mjs";
 import { notifyTelegramDocument } from "./telegram.mjs";
@@ -175,12 +175,12 @@ const formatQueue = (queue, showRate = true) => {
       ? "🗓️ <b>Publicación estimada:</b> no quedan TP anteriores pendientes; esperando confirmación oficial"
       : mainRange
         ? [
-            `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
-            showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
-            alternateRange && alternateRange !== mainRange
-              ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
-              : null,
-          ].filter(Boolean).join("\n")
+          `🗓️ <b>Publicación estimada:</b> ${mainRange}`,
+          showRate ? `📊 <b>Ritmo:</b> ≈${rate} TP por día hábil` : null,
+          alternateRange && alternateRange !== mainRange
+            ? `🏖️ <b>Si cierran desde el 19 dic:</b> ${alternateRange}`
+            : null,
+        ].filter(Boolean).join("\n")
         : "🗓️ <b>Publicación estimada:</b> no disponible con los datos recientes",
     ratio === null
       ? "📈 <b>Avance desde el ingreso:</b> no disponible"
@@ -390,35 +390,81 @@ const previousRecords = previousState.records ?? {};
 const whatsAppConfig = getWhatsAppConfig();
 const results = [];
 
-for (const target of targets) {
-  try {
-    const resolvedTarget =
-      previousRecords[target]?.registry && !previousRecords[target]?.isPending
-        ? previousRecords[target].registry
-        : target;
+const isPublishedOrVerified = (current) =>
+  Boolean(current && (/^publicado$/i.test(current.status) || current.pdfVerification?.status === "verified"));
 
-    const current = await fetchCurrentState(resolvedTarget);
-    current.target = target;
+let latestEditionPromise = null;
+const getLatestEdition = () => {
+  latestEditionPromise ??= openLatestEditionPdf();
+  return latestEditionPromise;
+};
 
-    const prev =
-      previousRecords[target] ??
-      (current.registry ? previousRecords[current.registry] : null);
+try {
+  for (const target of targets) {
+    try {
+      const resolvedTarget =
+        previousRecords[target]?.registry && !previousRecords[target]?.isPending
+          ? previousRecords[target].registry
+          : target;
 
-    let screenshot = null;
-    let document = null;
-    if (/^publicado$/i.test(current.status)) {
+      const current = await fetchCurrentState(resolvedTarget);
+      current.target = target;
+
+      const prev =
+        previousRecords[target] ??
+        (current.registry ? previousRecords[current.registry] : null);
+
+      let screenshot = null;
+      let document = null;
+      const isOfficialPublished = /^publicado$/i.test(current.status);
+      let fetchedVerification = { status: "unverified", page: null };
+
+      if (isOfficialPublished && current.link && current.link !== "-") {
+        fetchedVerification = await verifyPublicationPdf(current.link, current.entity, {
+          gazetteNumber: current.gazetteNumber,
+          publicationDate: current.publicationDate,
+        });
+      } else if (
+        !isOfficialPublished &&
+        prev?.pdfVerification?.status === "verified" &&
+        prev.registry === current.registry &&
+        prev.entity === current.entity
+      ) {
+        if (!current.gazetteNumber || current.gazetteNumber === "-") {
+          current.gazetteNumber = prev.gazetteNumber ?? "-";
+        }
+        if (!current.publicationDate || current.publicationDate === "-") {
+          current.publicationDate = prev.publicationDate ?? "-";
+        }
+        if (!current.link || current.link === "-") {
+          current.link = prev.link ?? "-";
+        }
+        fetchedVerification = prev.pdfVerification;
+      } else if (current.entity && current.entity !== "-") {
+        const latestEdition = await getLatestEdition();
+        if (latestEdition) {
+          fetchedVerification = await latestEdition.verify(current.entity);
+          if (fetchedVerification.status === "verified") {
+            if (!current.gazetteNumber || current.gazetteNumber === "-") {
+              current.gazetteNumber = latestEdition.metadata.gazetteNumber ?? "-";
+            }
+            if (!current.publicationDate || current.publicationDate === "-") {
+              current.publicationDate = latestEdition.metadata.publicationDate ?? "-";
+            }
+            if (!current.link || current.link === "-") {
+              current.link = latestEdition.url.toString();
+            }
+          }
+        }
+      }
+
       const samePublication =
         prev?.registry === current.registry &&
         prev?.link === current.link &&
         prev?.entity === current.entity &&
         prev?.gazetteNumber === current.gazetteNumber &&
         prev?.publicationDate === current.publicationDate;
-      const fetchedVerification = current.link && current.link !== "-"
-        ? await verifyPublicationPdf(current.link, current.entity, {
-            gazetteNumber: current.gazetteNumber,
-            publicationDate: current.publicationDate,
-          })
-        : { status: "unverified", page: null };
+
       const verification = fetchedVerification.status === "verified"
         ? fetchedVerification
         : samePublication && prev?.pdfVerification?.status === "verified"
@@ -432,51 +478,58 @@ for (const target of targets) {
         photoSent: samePublication && prev?.pdfVerification?.photoSent === true,
         documentSent: samePublication && prev?.pdfVerification?.documentSent === true,
       };
-    }
 
-    const trackedFields = [
-      ["receivedAt", "Fecha de ingreso"],
-      ["processType", "Tipo de trámite"],
-      ["entity", "Titular"],
-      ["status", "Estado"],
-      ["gazetteNumber", "N.º de Gaceta"],
-      ["link", "Enlace"],
-      ["publicationDate", "Fecha de publicación"],
-      ["errataDate", "Fecha de fe de errata"],
-    ];
+      const trackedFields = [
+        ["receivedAt", "Fecha de ingreso"],
+        ["processType", "Tipo de trámite"],
+        ["entity", "Titular"],
+        ["status", "Estado"],
+        ["gazetteNumber", "N.º de Gaceta"],
+        ["link", "Enlace"],
+        ["publicationDate", "Fecha de publicación"],
+        ["errataDate", "Fecha de fe de errata"],
+      ];
 
-    let changes = [];
-    let isNewlyDiscovered = false;
+      let changes = [];
+      let isNewlyDiscovered = false;
 
-    if (prev?.isPending && !current.isPending) {
-      isNewlyDiscovered = true;
-      changes.push(`🎉 <b>¡Registro asignado en La Gaceta:</b> ${formatValue(current.registry)}`);
-    } else if (prev && !prev.isPending && !current.isPending) {
-      changes = trackedFields
-        .filter(([field]) => prev[field] !== current[field])
-        .map(
-          ([field, label]) =>
-            `• <b>${label}:</b> ${formatValue(prev[field])} → ${formatValue(current[field])}`,
-        );
-      if (current.pdfVerification?.status === "verified" &&
+      if (prev?.isPending && !current.isPending) {
+        isNewlyDiscovered = true;
+        changes.push(`🎉 <b>¡Registro asignado en La Gaceta:</b> ${formatValue(current.registry)}`);
+      } else if (prev && !prev.isPending && !current.isPending) {
+        changes = trackedFields
+          .filter(([field]) => prev[field] !== current[field])
+          .map(
+            ([field, label]) =>
+              `• <b>${label}:</b> ${formatValue(prev[field])} → ${formatValue(current[field])}`,
+          );
+        if (current.pdfVerification?.status === "verified" &&
           prev.pdfVerification?.page !== current.pdfVerification.page) {
+          changes.push(`• <b>Página verificada:</b> ${current.pdfVerification.page}`);
+        }
+      } else if (prev?.isPending && current.isPending &&
+        current.pdfVerification?.status === "verified" &&
+        prev.pdfVerification?.page !== current.pdfVerification.page) {
         changes.push(`• <b>Página verificada:</b> ${current.pdfVerification.page}`);
       }
-    }
 
-    results.push({
-      target,
-      current,
-      prev,
-      changes,
-      screenshot,
-      document,
-      isNewlyDiscovered,
-      error: null,
-    });
-  } catch (error) {
-    results.push({ target, current: null, prev: null, changes: [], error });
+      results.push({
+        target,
+        current,
+        prev,
+        changes,
+        screenshot,
+        document,
+        isNewlyDiscovered,
+        error: null,
+      });
+    } catch (error) {
+      results.push({ target, current: null, prev: null, changes: [], error });
+    }
   }
+} finally {
+  const latestEdition = latestEditionPromise ? await latestEditionPromise : null;
+  await latestEdition?.destroy();
 }
 
 const yearRequests = new Map();
@@ -496,23 +549,23 @@ const today = getManaguaDate();
 for (const result of results) {
   const year = getRegistryParts(result.current?.registry)?.[1];
   const yearRecords = year ? await yearRequests.get(year) : null;
-  result.queue = yearRecords && isEligiblePendingStatus(result.current.status)
+  result.queue = yearRecords && !isPublishedOrVerified(result.current) && isEligiblePendingStatus(result.current.status)
     ? calculateQueue(result.current.registry, result.current.receivedAt, yearRecords, today)
     : null;
   const previousQueue = previousState.estimates?.[result.current?.registry];
   result.progressChanges = previousQueue && result.queue
     ? [
-        ["pendingAhead", "TP anteriores pendientes"],
-        ["initialPending", "TP pendientes al ingresar"],
-      ]
-        .filter(([field]) =>
-          Number.isFinite(previousQueue[field]) &&
-          Number.isFinite(result.queue[field]) &&
-          previousQueue[field] !== result.queue[field],
-        )
-        .map(([field, label]) =>
-          `• <b>${label}:</b> ${previousQueue[field].toLocaleString("es-NI")} → ${result.queue[field].toLocaleString("es-NI")}`,
-        )
+      ["pendingAhead", "TP anteriores pendientes"],
+      ["initialPending", "TP pendientes al ingresar"],
+    ]
+      .filter(([field]) =>
+        Number.isFinite(previousQueue[field]) &&
+        Number.isFinite(result.queue[field]) &&
+        previousQueue[field] !== result.queue[field],
+      )
+      .map(([field, label]) =>
+        `• <b>${label}:</b> ${previousQueue[field].toLocaleString("es-NI")} → ${result.queue[field].toLocaleString("es-NI")}`,
+      )
     : [];
 }
 
@@ -547,13 +600,15 @@ if (previewDirectory && process.env.TITLE_MONITOR_DRY_RUN === "true") {
   await mkdir(previewDirectory, { recursive: true });
   for (const { current, screenshot, document } of results) {
     if (screenshot) {
-      const filename = `${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}-pagina-${current.pdfVerification.page}.png`;
+      const targetId = String(current.registry || current.target).replace(/[^a-zA-Z0-9-]/g, "_");
+      const filename = `${targetId}-pagina-${current.pdfVerification.page}.png`;
       const imagePath = path.join(previewDirectory, filename);
       await writeFile(imagePath, screenshot);
       console.log(`Vista previa de la página resaltada: ${imagePath}`);
     }
     if (document) {
-      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${current.registry.replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
+      const targetId = String(current.registry || current.target).replace(/[^a-zA-Z0-9-]/g, "_");
+      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${targetId}.pdf`;
       const documentPath = path.join(previewDirectory, filename);
       await writeFile(documentPath, document);
       console.log(`Vista previa del PDF: ${documentPath}`);
@@ -601,12 +656,12 @@ if (anyNewlyDiscovered) {
 
 const activeRates = results
   .filter(({ current, queue }) => current && !current.isPending &&
-    !/^publicado$/i.test(current.status) && queue?.forecast?.range?.from)
+    !isPublishedOrVerified(current) && queue?.forecast?.range?.from)
   .map(({ queue }) => queue.forecast.averagePerPublicationDay);
 const sharedRate = activeRates.length > 1 &&
   activeRates.every((rate) => Math.abs(rate - activeRates[0]) < 0.05)
-    ? activeRates[0]
-    : null;
+  ? activeRates[0]
+  : null;
 
 const blocks = results.map((result) => {
   if (result.error) {
@@ -618,7 +673,7 @@ const blocks = results.map((result) => {
 
   const { current, changes, progressChanges, isNewlyDiscovered } = result;
 
-  if (current.isPending) {
+  if (current.isPending && current.pdfVerification?.status !== "verified") {
     return [
       `👤 <b>${escapeHtml(current.entity || current.target)}</b>`,
       `📋 <b>Registro:</b> Pendiente de asignación [⏳ <b>Pendiente</b>]`,
@@ -632,7 +687,7 @@ const blocks = results.map((result) => {
     `📋 <b>Registro:</b> <code>${formatValue(current.registry)}</code> [${formatStatusBadge(current.status)}]`,
   ];
 
-  if (/^publicado$/i.test(current.status)) {
+  if (isPublishedOrVerified(current)) {
     const verified = current.pdfVerification?.status === "verified";
     lines.push(verified
       ? `📰 <b>Gaceta N.º:</b> ${formatValue(current.gazetteNumber)}, pág. ${current.pdfVerification.page} [🟢 <b>Verificado</b>]`
@@ -660,11 +715,11 @@ const footer = hasChanges
     ? "⚠️ <i>Al menos un registro no se pudo confirmar.</i>"
     : results.every(({ prev }) => !prev)
       ? "✅ <i>Primera consulta: estado verificado.</i>"
-    : sentDailyNoChangeReport
-      ? "🔔 <i>Sin cambios en los registros durante las comprobaciones de hoy.</i>"
-      : "🔔 <i>Sin cambios desde la última comprobación.</i>";
+      : sentDailyNoChangeReport
+        ? "🔔 <i>Sin cambios en los registros durante las comprobaciones de hoy.</i>"
+        : "🔔 <i>Sin cambios desde la última comprobación.</i>";
 const hasUnpublished = results.some(({ current }) =>
-  current && !/^publicado$/i.test(current.status));
+  current && !isPublishedOrVerified(current));
 
 const dashboardMessage = [
   headerTitle,
@@ -725,8 +780,9 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
       const mediaByRegistry = { ...(sameChat ? previousMessage.mediaByRegistry : {}) };
       const replacedMediaIds = [];
       for (const { current, screenshot, document } of results) {
-        if (!current?.registry || !/^publicado$/i.test(current.status)) continue;
-        const priorMedia = mediaByRegistry[current.registry] ?? {};
+        if (!current || !isPublishedOrVerified(current)) continue;
+        const mediaKey = current.registry || current.target;
+        const priorMedia = mediaByRegistry[mediaKey] ?? {};
         const nextMedia = { ...priorMedia };
         if (screenshot) {
           try {
@@ -748,7 +804,7 @@ if (process.env.TITLE_MONITOR_DRY_RUN !== "true" && sendNotification) {
             console.warn(error.message);
           }
         }
-        mediaByRegistry[current.registry] = nextMedia;
+        mediaByRegistry[mediaKey] = nextMedia;
       }
       lastTelegramMessage = { messageId, sentAt: now.toISOString(), chatFingerprint, mediaByRegistry };
       const previousSentAt = Date.parse(previousMessage?.sentAt);
@@ -815,9 +871,9 @@ const activePreviousRecords = Object.fromEntries(
 const activePreviousEstimates = Object.fromEntries(
   Object.entries(previousState.estimates ?? {}).filter(([registry]) =>
     !results.some(({ current }) =>
-      current?.registry === registry && /^publicado$/i.test(current.status)) &&
+      current?.registry === registry && isPublishedOrVerified(current)) &&
     (targets.includes(registry) ||
-    targets.some((target) => previousRecords[target]?.registry === registry)),
+      targets.some((target) => previousRecords[target]?.registry === registry)),
   ),
 );
 

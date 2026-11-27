@@ -78,6 +78,42 @@ const officialUrl = (link, base) => {
   return url;
 };
 
+const MONTHS_ES = {
+  enero: "01",
+  febrero: "02",
+  marzo: "03",
+  abril: "04",
+  mayo: "05",
+  junio: "06",
+  julio: "07",
+  agosto: "08",
+  septiembre: "09",
+  octubre: "10",
+  noviembre: "11",
+  diciembre: "12",
+};
+
+const extractEditionMetadata = (html, url) => {
+  const numberMatch =
+    html.match(/La Gaceta\s*-\s*No\.\s*(\d+)\b/i) ??
+    url.pathname.match(/la-gaceta-no-(\d+)-/i);
+  const dateMatch =
+    html.match(/\b(\d{2}\/\d{2}\/\d{4})\b/) ??
+    (() => {
+      const m = html.match(
+        /\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+de\s+(\d{4})\b/i,
+      );
+      if (!m) return null;
+      const day = m[1].padStart(2, "0");
+      const month = MONTHS_ES[m[2].toLowerCase()];
+      return [null, `${day}/${month}/${m[3]}`];
+    })();
+  return {
+    gazetteNumber: numberMatch?.[1] ?? null,
+    publicationDate: dateMatch?.[1] ?? null,
+  };
+};
+
 const resolvePdf = async (link, edition = {}, depth = 0) => {
   if (depth > 2) throw new Error("La edición contiene demasiadas páginas intermedias.");
   const url = officialUrl(link);
@@ -89,7 +125,14 @@ const resolvePdf = async (link, edition = {}, depth = 0) => {
   const contentType = response.headers.get("content-type") ?? "";
   const data = await readLimitedResponse(response, /pdf/i.test(contentType) ? 50 * 1024 * 1024 : 15 * 1024 * 1024);
   if (Buffer.from(data.subarray(0, 5)).toString("ascii") === "%PDF-") {
-    return { data, url };
+    return {
+      data,
+      url,
+      metadata: {
+        gazetteNumber: edition.gazetteNumber ?? null,
+        publicationDate: edition.publicationDate ?? null,
+      },
+    };
   }
   if (!/html/i.test(contentType)) throw new Error("El enlace no devolvió un PDF ni una página de edición.");
   const html = Buffer.from(data).toString("utf8");
@@ -119,40 +162,81 @@ const resolvePdf = async (link, edition = {}, depth = 0) => {
   if (pdfData.length > 50 * 1024 * 1024 || pdfData.subarray(0, 5).toString("ascii") !== "%PDF-") {
     throw new Error("El documento incorporado no es un PDF válido.");
   }
-  return { data: new Uint8Array(pdfData), url };
+  return {
+    data: new Uint8Array(pdfData),
+    url,
+    metadata: extractEditionMetadata(html, url),
+  };
+};
+
+const openPdfDocument = async (link, edition = {}) => {
+  const { data, url, metadata } = await resolvePdf(link, edition);
+  const document = Buffer.from(data);
+  const task = getDocument({ data, useSystemFonts: true, disableFontFace: true });
+  try {
+    const pdf = await task.promise;
+    const pages = [];
+    for (let index = 1; index <= pdf.numPages; index++) {
+      const page = await pdf.getPage(index);
+      const content = await page.getTextContent();
+      pages.push(content.items.map((item) => item.str ?? "").join(" "));
+      page.cleanup();
+    }
+    return {
+      url,
+      document,
+      metadata,
+      verify: async (name) => {
+        const page = findUniqueNamePage(pages, name);
+        if (!page) return { status: "unverified", page: null };
+        let screenshot = null;
+        try {
+          screenshot = await renderHighlightedPage(await pdf.getPage(page), name);
+        } catch (error) {
+          console.warn(`No se pudo crear la imagen de la página ${page}: ${error.message}`);
+        }
+        return {
+          status: "verified",
+          page,
+          url: `${url.toString().split("#")[0]}#page=${page}`,
+          screenshot,
+          document,
+        };
+      },
+      destroy: () => task.destroy(),
+    };
+  } catch (error) {
+    await task.destroy();
+    throw error;
+  }
+};
+
+export const openLatestEditionPdf = async () => {
+  try {
+    const editionsUrl = new URL("https://www.lagaceta.gob.ni/ediciones");
+    const response = await fetch(editionsUrl, {
+      signal: AbortSignal.timeout(30_000),
+      redirect: "manual",
+    });
+    if (!response.ok) throw new Error(`La Gaceta respondió HTTP ${response.status}.`);
+    const html = await response.text();
+    const latestMatch = html.match(/href=["'](\/la-gaceta-no-\d+-[^"']+)["']/i);
+    if (!latestMatch) throw new Error("No se encontró ninguna edición reciente en La Gaceta.");
+    const latestUrl = officialUrl(latestMatch[1], editionsUrl).toString();
+    return await openPdfDocument(latestUrl);
+  } catch (error) {
+    console.warn(`No se pudo abrir la edición actual de La Gaceta: ${error.message}`);
+    return null;
+  }
 };
 
 export const verifyPublicationPdf = async (link, name, edition = {}) => {
   try {
-    const { data, url } = await resolvePdf(link, edition);
-    const document = Buffer.from(data);
-    const task = getDocument({ data, useSystemFonts: true, disableFontFace: true });
+    const doc = await openPdfDocument(link, edition);
     try {
-      const pdf = await task.promise;
-      const pages = [];
-      for (let index = 1; index <= pdf.numPages; index++) {
-        const page = await pdf.getPage(index);
-        const content = await page.getTextContent();
-        pages.push(content.items.map((item) => item.str ?? "").join(" "));
-        page.cleanup();
-      }
-      const page = findUniqueNamePage(pages, name);
-      if (!page) return { status: "unverified", page: null };
-      let screenshot = null;
-      try {
-        screenshot = await renderHighlightedPage(await pdf.getPage(page), name);
-      } catch (error) {
-        console.warn(`No se pudo crear la imagen de la página ${page}: ${error.message}`);
-      }
-      return {
-        status: "verified",
-        page,
-        url: `${url.toString().split("#")[0]}#page=${page}`,
-        screenshot,
-        document,
-      };
+      return await doc.verify(name);
     } finally {
-      await task.destroy();
+      await doc.destroy();
     }
   } catch (error) {
     console.warn(`No se pudo verificar el PDF de ${name}: ${error.message}`);

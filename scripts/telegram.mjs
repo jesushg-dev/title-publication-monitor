@@ -1,5 +1,5 @@
 export const notifyTelegramDocument = async (document, current, messageId, env = process.env) => {
-  const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
+  const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry || current.target).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
   const form = new FormData();
   form.append("chat_id", env.TELEGRAM_CHAT_ID);
   form.append("caption", `📄 La Gaceta N.º ${current.gazetteNumber} — ${current.entity}. Nombre en la página ${current.pdfVerification.page}.`);

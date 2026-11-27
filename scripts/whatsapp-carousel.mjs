@@ -51,11 +51,11 @@ export const buildWhatsAppCarouselCards = (results) => {
     const lines = [`*${name}*`, `📋 ${registry} · ${status}`];
     if (error) {
       lines.push("⚠️ No se pudo confirmar el estado en esta consulta.");
-    } else if (current?.isPending) {
-      lines.push("🔍 Búsqueda activa por nombre.");
-    } else if (/^publicado$/i.test(status)) {
+    } else if (/^publicado$/i.test(status) || current?.pdfVerification?.status === "verified") {
       lines.push(`📰 Gaceta N.º ${current.gazetteNumber || "pendiente"}${current.pdfVerification?.status === "verified" ? ` · página ${current.pdfVerification.page} verificada` : " · página sin verificar"}`);
       lines.push(`📅 Ingreso: ${current.receivedAt || "pendiente"} · Publicación: ${current.publicationDate || "pendiente"}`);
+    } else if (current?.isPending) {
+      lines.push("🔍 Búsqueda activa por nombre.");
     } else {
       lines.push(`📥 Ingreso: ${current.receivedAt || "pendiente"}`);
       if (Number.isFinite(queue?.pendingAhead)) lines.push(`⏳ TP anteriores pendientes: ${queue.pendingAhead.toLocaleString("es-NI")}`);

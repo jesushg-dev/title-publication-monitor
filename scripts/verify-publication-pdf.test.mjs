@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
-import { findUniqueNamePage, verifyPublicationPdf } from "./verify-publication-pdf.mjs";
+import { findUniqueNamePage, openLatestEditionPdf, verifyPublicationPdf } from "./verify-publication-pdf.mjs";
 import { makePdf } from "./pdf-test-fixture.mjs";
 
 test("solo acepta el nombre completo en una página única", () => {
@@ -74,6 +74,38 @@ test("sigue la edición intermedia y extrae el PDF incorporado", async () => {
     assert.match(result.url, /la-gaceta-no-195.*#page=1$/);
     assert.ok(Buffer.isBuffer(result.screenshot));
     assert.deepEqual(result.document, pdf);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("openLatestEditionPdf abre la edición más reciente y busca múltiples nombres", async () => {
+  const originalFetch = globalThis.fetch;
+  const visited = [];
+  const pdf = makePdf("DANILO JOSE ACEVEDO FLORES");
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    visited.push(url.pathname);
+    if (url.pathname === "/ediciones") {
+      return new Response('<a href="/la-gaceta-no-219-viernes-27-de-noviembre-de-2026/">Edición actual</a>', {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    return new Response(`<h1>La Gaceta - No. 219 Viernes 27 de Noviembre de 2026</h1><script>const pdfData = atob('${pdf.toString("base64")}');</script>`, {
+      headers: { "content-type": "text/html" },
+    });
+  };
+  try {
+    const edition = await openLatestEditionPdf();
+    assert.ok(edition);
+    assert.deepEqual(edition.metadata, { gazetteNumber: "219", publicationDate: "27/11/2026" });
+    const found = await edition.verify("Danilo José Acevedo Flores");
+    const missing = await edition.verify("Otra Persona Que No Está");
+    await edition.destroy();
+    assert.deepEqual(visited, ["/ediciones", "/la-gaceta-no-219-viernes-27-de-noviembre-de-2026/"]);
+    assert.equal(found.status, "verified");
+    assert.equal(found.page, 1);
+    assert.equal(missing.status, "unverified");
   } finally {
     globalThis.fetch = originalFetch;
   }

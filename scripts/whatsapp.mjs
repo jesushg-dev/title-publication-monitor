@@ -14,7 +14,7 @@ export const getWhatsAppConfig = (env = process.env) => {
 };
 
 export const publicationDocumentKey = (current) =>
-  [current.registry, current.gazetteNumber, current.publicationDate, current.link].join("|");
+  [current.registry || current.target, current.gazetteNumber, current.publicationDate, current.link].join("|");
 
 export const needsWhatsAppDocument = (config, previous, current) =>
   Boolean(config?.recipients.some((recipient) => {
@@ -149,7 +149,7 @@ export const notifyWhatsApp = async (config, message, media = [], previous = {},
     for (const { document, current } of media) {
       if (!document) continue;
       const key = publicationDocumentKey(current);
-      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
+      const filename = `La-Gaceta-${String(current.gazetteNumber).replace(/[^a-zA-Z0-9-]/g, "_")}-${String(current.registry || current.target).replace(/[^a-zA-Z0-9-]/g, "_")}.pdf`;
       const id = await post("document", config.token, {
         to: recipient,
         media: `data:application/pdf;name=${filename};base64,${Buffer.from(document).toString("base64")}`,
